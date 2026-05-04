@@ -1,4 +1,3 @@
-# File 2: shipment_automation/doctype/shipment_import/shipment_import.py
 import frappe
 from frappe.model.document import Document
 from frappe.utils import flt
@@ -18,24 +17,34 @@ class ShipmentImport(Document):
             file_path = file_doc.get_full_path()
             wb = openpyxl.load_workbook(file_path, data_only=True)
             sheet = wb.active
+
             self.validation_log = [] 
             valid = True
+            
             for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
                 if not row[4]: continue
+                
                 qty_exc = flt(row[2])
                 rate_exc = flt(row[3])
                 po_val_exc = str(row[4])
+
                 try:
                     po_parts = po_val_exc.split('-')
                     po_name = f'{self.po_prefix}{po_parts[0]}'
                     line_idx = int(po_parts[1])
                 except:
                     valid = False; continue
-                po_item = frappe.db.get_value('Purchase Order Item', {'parent': po_name, 'idx': line_idx}, ['qty', 'rate', 'name'], as_dict=1)
+
+                po_item = frappe.db.get_value('Purchase Order Item', 
+                    {'parent': po_name, 'idx': line_idx}, 
+                    ['qty', 'rate', 'name'], as_dict=1)
+
                 if not po_item:
                     valid = False; continue
+
                 if abs((qty_exc * 1000) - po_item.qty) > 0.01: valid = False
                 if abs((rate_exc / 1000) - po_item.rate) > 0.000001: valid = False
+
             self.db_set('status', 'Validated' if valid else 'Failed')
             self.save()
         except Exception:
