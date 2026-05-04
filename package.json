@@ -1,0 +1,7 @@
+{
+  "name": "shipment_automation",
+  "version": "0.0.1",
+  "description": "Automated Import Shipment Processing",
+  "author": "NexGen ERP Technologies",
+  "license": "MIT"
+}
