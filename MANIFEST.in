@@ -1,0 +1,8 @@
+include *.json
+include *.js
+include *.css
+include *.txt
+recursive-include shipment_automation *.json
+recursive-include shipment_automation *.js
+recursive-include shipment_automation *.css
+recursive-include shipment_automation *.py
