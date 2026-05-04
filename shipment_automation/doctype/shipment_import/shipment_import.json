@@ -1,0 +1,11 @@
+{
+ "doctype": "DocType",
+ "name": "Shipment Import",
+ "module": "Shipment Automation",
+ "fields": [
+  { "fieldname": "supplier", "fieldtype": "Link", "label": "Supplier", "options": "Supplier", "reqd": 1 },
+  { "fieldname": "excel_file", "fieldtype": "Attach", "label": "Excel File", "reqd": 1 },
+  { "fieldname": "status", "fieldtype": "Select", "label": "Status", "options": "Draft\nValidating\nValidated\nProcessing\nCompleted\nFailed", "default": "Draft", "read_only": 1 },
+  { "fieldname": "po_prefix", "fieldtype": "Data", "label": "PO Prefix", "default": "FEPL/PO/" }
+ ]
+}
