@@ -5,4 +5,5 @@ app_description = "Automated Import Shipment Processing"
 app_email = "admin@nexgenerp.com"
 app_license = "mit"
 
-app_include_js = "/assets/shipment_automation/js/shipment_automation.js"
+# We removed app_include_js to prevent build errors on Frappe Cloud.
+# The DocType JS will load automatically from the doctype folder.
