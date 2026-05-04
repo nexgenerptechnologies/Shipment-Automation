@@ -1,4 +1,3 @@
-// File 3: shipment_automation/doctype/shipment_import/shipment_import.js
 frappe.ui.form.on('Shipment Import', {
     refresh: function(frm) {
         if (frm.doc.excel_file && frm.doc.status === 'Draft') {
