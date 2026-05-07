@@ -7,8 +7,10 @@
  "engine": "InnoDB",
  "field_order": [
   "supplier",
-  "excel_file",
+  "pr_naming_series",
+  "pi_naming_series",
   "po_prefix",
+  "excel_file",
   "status",
   "section_break_linked",
   "receipt_name",
@@ -30,17 +32,33 @@
    "reqd": 1
   },
   {
-   "fieldname": "excel_file",
-   "fieldtype": "Attach",
-   "in_list_view": 1,
-   "label": "Excel File",
-   "reqd": 1
+   "fieldname": "pr_naming_series",
+   "fieldtype": "Select",
+   "label": "Purchase Receipt Naming Series",
+   "reqd": 1,
+   "description": "Select the Purchase Receipt series BEFORE uploading the Shipment Excel."
+  },
+  {
+   "fieldname": "pi_naming_series",
+   "fieldtype": "Select",
+   "label": "Purchase Invoice Naming Series",
+   "reqd": 1,
+   "description": "Select the Purchase Invoice series BEFORE clicking Create Invoice & Bill of Entry."
   },
   {
    "default": "FEPL/PO/",
    "fieldname": "po_prefix",
    "fieldtype": "Data",
-   "label": "PO Prefix"
+   "label": "PO Prefix",
+   "description": "Prefix used to construct PO names from the Excel reference (e.g. FEPL/PO/)"
+  },
+  {
+   "fieldname": "excel_file",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "Shipment Excel File",
+   "reqd": 1,
+   "description": "Columns: C=Qty, D=Rate, E=PO Reference (e.g. 12345-1)"
   },
   {
    "default": "Draft",
@@ -53,7 +71,6 @@
    "read_only": 1
   },
   {
-   "collapsible": 0,
    "fieldname": "section_break_linked",
    "fieldtype": "Section Break",
    "label": "Linked Documents"
@@ -80,7 +97,6 @@
    "read_only": 1
   },
   {
-   "collapsible": 0,
    "fieldname": "section_break_validation",
    "fieldtype": "Section Break",
    "label": "Validation Results"
@@ -92,7 +108,6 @@
    "read_only": 1
   },
   {
-   "collapsible": 0,
    "fieldname": "section_break_receipts",
    "fieldtype": "Section Break",
    "label": "Processing Results"
@@ -106,7 +121,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-01-03 00:00:00.000000",
+ "modified": "2024-01-04 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Shipment Automation",
  "name": "Shipment Import",

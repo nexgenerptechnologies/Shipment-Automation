@@ -1,0 +1,103 @@
+{
+ "actions": [],
+ "autoname": "SPOI-.YYYY.-.#####",
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "supplier",
+  "po_naming_series",
+  "po_excel",
+  "status",
+  "section_break_log",
+  "creation_log"
+ ],
+ "fields": [
+  {
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Supplier",
+   "options": "Supplier",
+   "reqd": 0,
+   "description": "Optional. Leave blank if each Excel row has a different supplier."
+  },
+  {
+   "fieldname": "po_naming_series",
+   "fieldtype": "Select",
+   "in_list_view": 0,
+   "label": "PO Naming Series",
+   "reqd": 1,
+   "description": "Select the Purchase Order naming series before uploading the Excel file."
+  },
+  {
+   "fieldname": "po_excel",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "PO Excel File",
+   "reqd": 1,
+   "description": "Columns: A=Item Code, B=Item Name, C=Description, D=UOM, E=Qty, F=Rate, G=Supplier, H=PO Number (grouping key)"
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Draft\nValidating\nValidated\nProcessing\nCompleted\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_log",
+   "fieldtype": "Section Break",
+   "label": "Log"
+  },
+  {
+   "fieldname": "creation_log",
+   "fieldtype": "Long Text",
+   "label": "Creation Log",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Shipment Automation",
+ "name": "Shipment PO Import",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Purchase Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "search_fields": "status",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

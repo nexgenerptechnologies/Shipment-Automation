@@ -25,6 +25,8 @@ class ShipmentImport(Document):
         """Kick off background processing: creates a single combined Purchase Receipt (Draft)."""
         if self.status != "Validated":
             frappe.throw("Please validate the data first before processing.")
+        if not self.pr_naming_series:
+            frappe.throw("Please select a Purchase Receipt Naming Series before processing.")
         self.db_set("status", "Processing")
         self.db_set("receipts_log", "⏳ Processing in progress. Please refresh in a few seconds.")
         frappe.db.commit()
@@ -52,6 +54,9 @@ class ShipmentImport(Document):
                 f"before creating a Purchase Invoice. Current status: {pr_doc.docstatus}"
             )
 
+        if not self.pi_naming_series:
+            frappe.throw("Please select a Purchase Invoice Naming Series before creating the invoice.")
+
         if self.invoice_name:
             frappe.throw(
                 f"A Purchase Invoice <b>{self.invoice_name}</b> already exists for this shipment."
@@ -61,6 +66,7 @@ class ShipmentImport(Document):
         try:
             from erpnext.stock.doctype.purchase_receipt.purchase_receipt import make_purchase_invoice
             pi = make_purchase_invoice(self.receipt_name)
+            pi.naming_series = self.pi_naming_series
             pi.insert(ignore_permissions=True)
             self.db_set("invoice_name", pi.name)
             frappe.db.commit()
@@ -263,6 +269,7 @@ def run_processing(docname):
 
         # ── Build one combined Purchase Receipt (DRAFT) ─────────────
         pr = frappe.new_doc("Purchase Receipt")
+        pr.naming_series = doc.pr_naming_series
         pr.supplier = doc.supplier
         pr.posting_date = nowdate()
         pr.company = company

@@ -1,4 +1,53 @@
+const UTILS = "shipment_automation.shipment_automation.utils.get_naming_series";
+
 frappe.ui.form.on('Shipment Import', {
+
+    onload: function (frm) {
+        // Populate PR naming series dynamically
+        frappe.call({
+            method: UTILS,
+            args: { doctype: "Purchase Receipt" },
+            callback: function (r) {
+                if (r.message && r.message.length) {
+                    frm.set_df_property("pr_naming_series", "options",
+                        [""].concat(r.message).join("\n"));
+                    frm.refresh_field("pr_naming_series");
+                }
+            }
+        });
+
+        // Populate PI naming series dynamically
+        frappe.call({
+            method: UTILS,
+            args: { doctype: "Purchase Invoice" },
+            callback: function (r) {
+                if (r.message && r.message.length) {
+                    frm.set_df_property("pi_naming_series", "options",
+                        [""].concat(r.message).join("\n"));
+                    frm.refresh_field("pi_naming_series");
+                }
+            }
+        });
+
+        frm.set_df_property("excel_file", "read_only",
+            frm.doc.pr_naming_series ? 0 : 1);
+    },
+
+    pr_naming_series: function (frm) {
+        const locked = !frm.doc.pr_naming_series;
+        frm.set_df_property("excel_file", "read_only", locked ? 1 : 0);
+        frm.refresh_field("excel_file");
+        if (locked) {
+            frappe.show_alert({ message: "⚠️ Select PR Naming Series first.", indicator: "orange" });
+        }
+    },
+
+    excel_file: function (frm) {
+        if (!frm.doc.pr_naming_series) {
+            frappe.show_alert({ message: "⚠️ Select PR Naming Series before uploading.", indicator: "red" });
+            frm.set_value("excel_file", "");
+        }
+    },
 
     refresh: function (frm) {
 
@@ -31,7 +80,7 @@ frappe.ui.form.on('Shipment Import', {
         }
 
         // ── Validate Data button ─────────────────────────────────
-        if (frm.doc.excel_file && frm.doc.status === 'Draft') {
+        if (frm.doc.excel_file && frm.doc.status === 'Draft' && frm.doc.pr_naming_series) {
             frm.add_custom_button(__('Validate Data'), function () {
                 frappe.confirm(
                     'Start validation of the uploaded Excel file against ERPNext Purchase Orders?',
@@ -65,6 +114,15 @@ frappe.ui.form.on('Shipment Import', {
         // Shown when: receipt exists, receipt is submitted, no invoice yet
         if (frm.doc.receipt_name && frm.doc.status === 'Completed' && !frm.doc.invoice_name) {
             frm.add_custom_button(__('Create Invoice & Bill of Entry'), function () {
+                if (!frm.doc.pi_naming_series) {
+                    frappe.msgprint({
+                        title: __('Missing Naming Series'),
+                        indicator: 'orange',
+                        message: `Please select a <b>Purchase Invoice Naming Series</b> first.`
+                    });
+                    return;
+                }
+
                 // First check if the receipt is submitted
                 frappe.db.get_value('Purchase Receipt', frm.doc.receipt_name, 'docstatus', (r) => {
                     if (r.docstatus !== 1) {
