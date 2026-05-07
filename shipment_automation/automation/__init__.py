@@ -1,1 +1,0 @@
-# shipment_automation module
