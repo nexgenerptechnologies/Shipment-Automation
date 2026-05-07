@@ -1,1 +1,1 @@
-# init
+# shipment_automation.shipment_automation.doctype package
