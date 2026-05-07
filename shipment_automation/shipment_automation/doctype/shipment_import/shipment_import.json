@@ -9,7 +9,11 @@
   "supplier",
   "excel_file",
   "po_prefix",
-  "status"
+  "status",
+  "section_break_validation",
+  "validation_log",
+  "section_break_receipts",
+  "receipts_log"
  ],
  "fields": [
   {
@@ -43,11 +47,35 @@
    "label": "Status",
    "options": "Draft\nValidating\nValidated\nProcessing\nCompleted\nFailed",
    "read_only": 1
+  },
+  {
+   "collapsible": 0,
+   "fieldname": "section_break_validation",
+   "fieldtype": "Section Break",
+   "label": "Validation Results"
+  },
+  {
+   "fieldname": "validation_log",
+   "fieldtype": "Long Text",
+   "label": "Validation Log",
+   "read_only": 1
+  },
+  {
+   "collapsible": 0,
+   "fieldname": "section_break_receipts",
+   "fieldtype": "Section Break",
+   "label": "Processing Results"
+  },
+  {
+   "fieldname": "receipts_log",
+   "fieldtype": "Long Text",
+   "label": "Receipts Log",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-01-01 00:00:00.000000",
+ "modified": "2024-01-02 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Shipment Automation",
  "name": "Shipment Import",
