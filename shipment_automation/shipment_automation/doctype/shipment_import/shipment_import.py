@@ -134,10 +134,22 @@ def run_validation(docname):
             po_val_exc = str(row[4]).strip()
 
             # ── Parse PO reference ──────────────────────────────────
+            # Look for optional Naming Series in Excel Column F (index 5)
+            excel_series = str(row[5]).strip() if len(row) > 5 and row[5] else ""
+            
             try:
                 po_parts = po_val_exc.split("-")
-                po_name = f"{doc.po_prefix}{po_parts[0]}"
+                base_po_num = po_parts[0]
                 line_idx = int(po_parts[1])
+                
+                # Smart fallback for PO Name
+                if excel_series:
+                    po_name = f"{excel_series}{base_po_num}"
+                elif doc.po_prefix:
+                    po_name = f"{doc.po_prefix}{base_po_num}"
+                else:
+                    po_name = base_po_num # Fallback if full name is passed directly
+                    
             except Exception:
                 errors.append(
                     f"Row {row_idx} ❌  Cannot parse PO reference '{po_val_exc}'. "
@@ -239,10 +251,21 @@ def run_processing(docname):
             rate_exc = flt(row[3])
             po_val_exc = str(row[4]).strip()
 
+            # Look for optional Naming Series in Excel Column F (index 5)
+            excel_series = str(row[5]).strip() if len(row) > 5 and row[5] else ""
+
             try:
                 po_parts = po_val_exc.split("-")
-                po_name = f"{doc.po_prefix}{po_parts[0]}"
+                base_po_num = po_parts[0]
                 line_idx = int(po_parts[1])
+                
+                # Smart fallback for PO Name
+                if excel_series:
+                    po_name = f"{excel_series}{base_po_num}"
+                elif doc.po_prefix:
+                    po_name = f"{doc.po_prefix}{base_po_num}"
+                else:
+                    po_name = base_po_num
             except Exception:
                 continue
 

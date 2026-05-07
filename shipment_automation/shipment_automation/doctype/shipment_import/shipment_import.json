@@ -46,11 +46,10 @@
    "description": "Select the Purchase Invoice series BEFORE clicking Create Invoice & Bill of Entry."
   },
   {
-   "default": "FEPL/PO/",
    "fieldname": "po_prefix",
-   "fieldtype": "Data",
-   "label": "PO Prefix",
-   "description": "Prefix used to construct PO names from the Excel reference (e.g. FEPL/PO/)"
+   "fieldtype": "Select",
+   "label": "PO Naming Series (Fallback)",
+   "description": "Optional: Fallback Naming Series if Column F is empty in the Excel file."
   },
   {
    "fieldname": "excel_file",

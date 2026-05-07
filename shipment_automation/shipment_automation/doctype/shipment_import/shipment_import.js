@@ -29,6 +29,19 @@ frappe.ui.form.on('Shipment Import', {
             }
         });
 
+        // Populate PO Naming Series (Fallback) dynamically
+        frappe.call({
+            method: UTILS,
+            args: { doctype: "Purchase Order" },
+            callback: function (r) {
+                if (r.message && r.message.length) {
+                    frm.set_df_property("po_prefix", "options",
+                        [""].concat(r.message).join("\n"));
+                    frm.refresh_field("po_prefix");
+                }
+            }
+        });
+
         frm.set_df_property("excel_file", "read_only",
             frm.doc.pr_naming_series ? 0 : 1);
     },
