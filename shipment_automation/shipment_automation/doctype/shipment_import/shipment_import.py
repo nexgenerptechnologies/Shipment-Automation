@@ -22,7 +22,7 @@ class ShipmentImport(Document):
 
     @frappe.whitelist()
     def start_processing(self):
-        """Kick off background processing: creates Purchase Receipts for validated data."""
+        """Kick off background processing: creates a single combined Purchase Receipt (Draft)."""
         if self.status != "Validated":
             frappe.throw("Please validate the data first before processing.")
         self.db_set("status", "Processing")
@@ -35,6 +35,62 @@ class ShipmentImport(Document):
             docname=self.name,
         )
         return "Processing started in the background. Refresh the page in a few seconds."
+
+    @frappe.whitelist()
+    def create_purchase_invoice_and_boe(self):
+        """
+        1. Creates a Purchase Invoice (Draft) from the submitted Purchase Receipt.
+        2. Automatically creates a Bill of Entry (Draft) linked to that Invoice.
+        """
+        if not self.receipt_name:
+            frappe.throw("No Purchase Receipt is linked to this Shipment Import.")
+
+        pr_doc = frappe.get_doc("Purchase Receipt", self.receipt_name)
+        if pr_doc.docstatus != 1:
+            frappe.throw(
+                f"Purchase Receipt <b>{self.receipt_name}</b> must be <b>Submitted</b> "
+                f"before creating a Purchase Invoice. Current status: {pr_doc.docstatus}"
+            )
+
+        if self.invoice_name:
+            frappe.throw(
+                f"A Purchase Invoice <b>{self.invoice_name}</b> already exists for this shipment."
+            )
+
+        # ── Step 1: Create Purchase Invoice from Purchase Receipt ────
+        try:
+            from erpnext.stock.doctype.purchase_receipt.purchase_receipt import make_purchase_invoice
+            pi = make_purchase_invoice(self.receipt_name)
+            pi.insert(ignore_permissions=True)
+            self.db_set("invoice_name", pi.name)
+            frappe.db.commit()
+        except Exception as exc:
+            frappe.log_error(frappe.get_traceback(), "Shipment Import – Create PI Error")
+            frappe.throw(f"Failed to create Purchase Invoice: {exc}")
+
+        # ── Step 2: Auto-create Bill of Entry (Draft) ────────────────
+        boe_name = None
+        boe_error = None
+        try:
+            boe = frappe.new_doc("Bill of Entry")
+            boe.purchase_invoice = pi.name
+            boe.posting_date = nowdate()
+            boe.company = pr_doc.company
+            boe.supplier = pr_doc.supplier
+            # Bill of Entry No will be filled by the user after BOE arrives
+            boe.insert(ignore_permissions=True, ignore_mandatory=True)
+            boe_name = boe.name
+            self.db_set("bill_of_entry_name", boe_name)
+            frappe.db.commit()
+        except Exception as exc:
+            frappe.log_error(frappe.get_traceback(), "Shipment Import – Create BOE Error")
+            boe_error = str(exc)
+
+        return {
+            "invoice": pi.name,
+            "bill_of_entry": boe_name,
+            "boe_error": boe_error,
+        }
 
 
 # ─────────────────────────────────────────────
@@ -64,7 +120,6 @@ def run_validation(docname):
         ok_rows = 0
 
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-            # Skip empty rows
             if not row[4]:
                 continue
 
@@ -157,12 +212,8 @@ def run_validation(docname):
 def run_processing(docname):
     """
     Reads all validated rows from the Excel file and creates a SINGLE
-    combined Purchase Receipt with line items from ALL Purchase Orders.
+    combined Purchase Receipt (saved as DRAFT) with line items from ALL Purchase Orders.
     Each line item still carries its individual PO reference for traceability.
-
-    Note: All POs must belong to the same Supplier (the one on the
-    Shipment Import record). The first valid PO's company is used for
-    the receipt header.
     """
     doc = frappe.get_doc("Shipment Import", docname)
     try:
@@ -187,7 +238,7 @@ def run_processing(docname):
                 po_name = f"{doc.po_prefix}{po_parts[0]}"
                 line_idx = int(po_parts[1])
             except Exception:
-                continue  # Already caught during validation; skip silently here
+                continue
 
             rows_to_process.append(
                 {
@@ -210,7 +261,7 @@ def run_processing(docname):
         company = first_po.company
         default_wh = frappe.db.get_single_value("Stock Settings", "default_warehouse")
 
-        # ── Build one combined Purchase Receipt ─────────────────────
+        # ── Build one combined Purchase Receipt (DRAFT) ─────────────
         pr = frappe.new_doc("Purchase Receipt")
         pr.supplier = doc.supplier
         pr.posting_date = nowdate()
@@ -269,12 +320,15 @@ def run_processing(docname):
             frappe.db.commit()
             return
 
-        # ── Save the receipt ─────────────────────────────────────────
+        # ── Save as Draft ────────────────────────────────────────────
         try:
             pr.insert(ignore_permissions=True)
+            # pr is saved as Draft (docstatus=0) — user must review and submit manually
 
             log_parts = [
-                f"✅  Purchase Receipt {pr.name} created successfully.",
+                f"✅  Purchase Receipt <b>{pr.name}</b> created as DRAFT.",
+                f"    ⚠️  Please review and Submit the receipt manually to post stock entries.",
+                f"",
                 f"    Supplier : {doc.supplier}",
                 f"    Company  : {company}",
                 f"    Date     : {nowdate()}",
@@ -287,11 +341,9 @@ def run_processing(docname):
 
             if errors:
                 log_parts += ["", "SKIPPED LINES:", *errors]
-                new_status = "Completed"   # receipt created but some lines skipped
-            else:
-                new_status = "Completed"
 
-            doc.db_set("status", new_status)
+            doc.db_set("status", "Completed")
+            doc.db_set("receipt_name", pr.name)
             doc.db_set("receipts_log", "\n".join(log_parts))
 
         except Exception as exc:
