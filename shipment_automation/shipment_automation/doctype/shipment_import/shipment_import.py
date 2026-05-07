@@ -156,8 +156,13 @@ def run_validation(docname):
 
 def run_processing(docname):
     """
-    Groups validated rows by Purchase Order and creates one
-    Purchase Receipt per PO.
+    Reads all validated rows from the Excel file and creates a SINGLE
+    combined Purchase Receipt with line items from ALL Purchase Orders.
+    Each line item still carries its individual PO reference for traceability.
+
+    Note: All POs must belong to the same Supplier (the one on the
+    Shipment Import record). The first valid PO's company is used for
+    the receipt header.
     """
     doc = frappe.get_doc("Shipment Import", docname)
     try:
@@ -166,8 +171,8 @@ def run_processing(docname):
         wb = openpyxl.load_workbook(file_path, data_only=True)
         sheet = wb.active
 
-        # ── Group rows by PO ────────────────────────────────────────
-        po_items_map = {}   # { po_name: [ { idx, qty, rate, row_idx } ] }
+        # ── Collect all rows in order ───────────────────────────────
+        rows_to_process = []
 
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not row[4]:
@@ -177,89 +182,126 @@ def run_processing(docname):
             rate_exc = flt(row[3])
             po_val_exc = str(row[4]).strip()
 
-            po_parts = po_val_exc.split("-")
-            po_name = f"{doc.po_prefix}{po_parts[0]}"
-            line_idx = int(po_parts[1])
+            try:
+                po_parts = po_val_exc.split("-")
+                po_name = f"{doc.po_prefix}{po_parts[0]}"
+                line_idx = int(po_parts[1])
+            except Exception:
+                continue  # Already caught during validation; skip silently here
 
-            po_items_map.setdefault(po_name, []).append(
+            rows_to_process.append(
                 {
-                    "idx": line_idx,
+                    "po_name": po_name,
+                    "line_idx": line_idx,
                     "qty": qty_exc * 1000,
                     "rate": rate_exc / 1000,
                     "row_idx": row_idx,
                 }
             )
 
-        # ── Create one Purchase Receipt per PO ──────────────────────
-        created = []
+        if not rows_to_process:
+            doc.db_set("status", "Failed")
+            doc.db_set("receipts_log", "❌ No valid rows found to process.")
+            frappe.db.commit()
+            return
+
+        # ── Determine company from first PO ─────────────────────────
+        first_po = frappe.get_doc("Purchase Order", rows_to_process[0]["po_name"])
+        company = first_po.company
+        default_wh = frappe.db.get_single_value("Stock Settings", "default_warehouse")
+
+        # ── Build one combined Purchase Receipt ─────────────────────
+        pr = frappe.new_doc("Purchase Receipt")
+        pr.supplier = doc.supplier
+        pr.posting_date = nowdate()
+        pr.company = company
+
+        added_lines = []
         errors = []
+        po_set = set()
 
-        for po_name, items in po_items_map.items():
-            try:
-                po = frappe.get_doc("Purchase Order", po_name)
+        for item_data in rows_to_process:
+            po_name = item_data["po_name"]
+            line_idx = item_data["line_idx"]
 
-                pr = frappe.new_doc("Purchase Receipt")
-                pr.supplier = po.supplier
-                pr.posting_date = nowdate()
-                pr.company = po.company
+            po_item = frappe.db.get_value(
+                "Purchase Order Item",
+                {"parent": po_name, "idx": line_idx},
+                [
+                    "item_code", "item_name", "uom",
+                    "warehouse", "name", "conversion_factor",
+                ],
+                as_dict=True,
+            )
 
-                for item_data in items:
-                    po_item = frappe.db.get_value(
-                        "Purchase Order Item",
-                        {"parent": po_name, "idx": item_data["idx"]},
-                        [
-                            "item_code", "item_name", "uom",
-                            "warehouse", "name", "conversion_factor",
-                        ],
-                        as_dict=True,
-                    )
-
-                    if not po_item:
-                        errors.append(
-                            f"❌  Skipped Row {item_data['row_idx']}: "
-                            f"Line {item_data['idx']} not found in PO {po_name}."
-                        )
-                        continue
-
-                    default_wh = frappe.db.get_single_value("Stock Settings", "default_warehouse")
-
-                    pr.append(
-                        "items",
-                        {
-                            "item_code": po_item.item_code,
-                            "item_name": po_item.item_name,
-                            "qty": item_data["qty"],
-                            "rate": item_data["rate"],
-                            "uom": po_item.uom,
-                            "warehouse": po_item.warehouse or default_wh,
-                            "purchase_order": po_name,
-                            "purchase_order_item": po_item.name,
-                            "conversion_factor": po_item.conversion_factor or 1,
-                        },
-                    )
-
-                pr.insert(ignore_permissions=True)
-                created.append(
-                    f"✅  Purchase Receipt {pr.name} created for PO {po_name} "
-                    f"({len(items)} line(s))"
+            if not po_item:
+                errors.append(
+                    f"❌  Skipped Row {item_data['row_idx']}: "
+                    f"Line {line_idx} not found in PO {po_name}."
                 )
+                continue
 
-            except Exception as exc:
-                errors.append(f"❌  Failed to create receipt for PO {po_name}: {exc}")
-                frappe.log_error(frappe.get_traceback(), f"Shipment Import PR – {po_name}")
+            pr.append(
+                "items",
+                {
+                    "item_code": po_item.item_code,
+                    "item_name": po_item.item_name,
+                    "qty": item_data["qty"],
+                    "rate": item_data["rate"],
+                    "uom": po_item.uom,
+                    "warehouse": po_item.warehouse or default_wh,
+                    "purchase_order": po_name,
+                    "purchase_order_item": po_item.name,
+                    "conversion_factor": po_item.conversion_factor or 1,
+                },
+            )
 
-        # ── Build receipts log and set status ──────────────────────
-        log_parts = []
-        if created:
-            log_parts.append("PURCHASE RECEIPTS CREATED:\n" + "\n".join(created))
-        if errors:
-            log_parts.append("ERRORS:\n" + "\n".join(errors))
+            added_lines.append(
+                f"  • Row {item_data['row_idx']}: {po_item.item_code} | "
+                f"PO: {po_name} Line {line_idx} | "
+                f"Qty: {item_data['qty']} | Rate: {item_data['rate']:.4f}"
+            )
+            po_set.add(po_name)
 
-        receipts_log = "\n\n".join(log_parts) if log_parts else "No rows processed."
+        if not pr.items:
+            doc.db_set("status", "Failed")
+            doc.db_set("receipts_log", "❌ No items could be added to Purchase Receipt.\n\n" + "\n".join(errors))
+            frappe.db.commit()
+            return
 
-        new_status = "Completed" if not errors else "Failed"
-        doc.db_set("status", new_status)
-        doc.db_set("receipts_log", receipts_log)
+        # ── Save the receipt ─────────────────────────────────────────
+        try:
+            pr.insert(ignore_permissions=True)
+
+            log_parts = [
+                f"✅  Purchase Receipt {pr.name} created successfully.",
+                f"    Supplier : {doc.supplier}",
+                f"    Company  : {company}",
+                f"    Date     : {nowdate()}",
+                f"    POs covered ({len(po_set)}): {', '.join(sorted(po_set))}",
+                f"    Total lines: {len(pr.items)}",
+                "",
+                "LINE DETAILS:",
+                *added_lines,
+            ]
+
+            if errors:
+                log_parts += ["", "SKIPPED LINES:", *errors]
+                new_status = "Completed"   # receipt created but some lines skipped
+            else:
+                new_status = "Completed"
+
+            doc.db_set("status", new_status)
+            doc.db_set("receipts_log", "\n".join(log_parts))
+
+        except Exception as exc:
+            frappe.log_error(frappe.get_traceback(), "Shipment Import – PR Insert Error")
+            doc.db_set("status", "Failed")
+            doc.db_set(
+                "receipts_log",
+                f"❌ Failed to save Purchase Receipt:\n{exc}\n\nSkips:\n" + "\n".join(errors),
+            )
+
         frappe.db.commit()
 
     except Exception:
