@@ -1,7 +1,7 @@
 {
  "doctype": "DocType",
  "name": "Shipment Import",
- "module": "Shipment Automation",
+ "module": "Automation",
  "fields": [
   { "fieldname": "supplier", "fieldtype": "Link", "label": "Supplier", "options": "Supplier", "reqd": 1 },
   { "fieldname": "excel_file", "fieldtype": "Attach", "label": "Excel File", "reqd": 1 },
