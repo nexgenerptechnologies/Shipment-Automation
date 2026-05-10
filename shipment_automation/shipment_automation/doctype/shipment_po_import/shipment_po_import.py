@@ -242,6 +242,11 @@ def run_po_creation(docname):
                     })
 
                 po.insert(ignore_permissions=True)
+                
+                # Populate the custom line_number field for each item
+                for idx, item in enumerate(po.items, start=1):
+                    item.db_set("line_number", f"{po.name}-{idx}")
+                    
                 created.append(
                     f"✅  {po.name} | Excel PO#: {po_num} | "
                     f"Supplier: {data['supplier']} | {len(data['items'])} line(s)"
