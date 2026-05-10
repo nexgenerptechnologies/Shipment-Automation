@@ -1,6 +1,6 @@
 import frappe
 from frappe.model.document import Document
-from frappe.utils import flt, nowdate
+from frappe.utils import flt, getdate
 import openpyxl
 from io import BytesIO
 
@@ -67,8 +67,8 @@ def get_column_map(sheet):
     expected_headers = {
         "supplier": ["Supplier", "Supplier Name"],
         "po_num": ["Purchase Order Number", "PO Number", "PO #"],
-        "date": ["Date", "Posting Date"],
-        "required_by": ["Required By", "Delivery Date"],
+        "transaction_date": ["Date", "Posting Date", "Transaction Date"],
+        "schedule_date": ["Required By", "Delivery Date", "Schedule Date"],
         "item_code": ["Item Code", "Item"],
         "item_name": ["Item Name"],
         "description": ["Description"],
@@ -77,20 +77,12 @@ def get_column_map(sheet):
         "line_number": ["Line Number", "Line #"]
     }
     
-    found_headers = []
     for idx, cell_value in enumerate(header_row):
         if not cell_value: continue
         clean_val = str(cell_value).strip().lower()
-        found_any = False
         for key, aliases in expected_headers.items():
             if any(alias.lower() == clean_val for alias in aliases):
                 mapping[key] = idx
-                found_headers.append(clean_val)
-                found_any = True
-        if not found_any:
-            # We can log unknown headers if needed
-            pass
-
     return mapping
 
 
@@ -124,9 +116,8 @@ def run_po_validation(docname):
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
                 continue
             
-            # Check for existing PO to prevent duplicates
             if frappe.db.exists("Purchase Order", po_num):
-                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists in ERPNext.")
+                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists.")
                 continue
                 
             row_ok = True
@@ -138,18 +129,18 @@ def run_po_validation(docname):
                 row_ok = False
 
             if qty <= 0:
-                errors.append(f"Row {row_idx} ❌ Quantity is missing or invalid (must be > 0).")
+                errors.append(f"Row {row_idx} ❌ Quantity must be > 0.")
                 row_ok = False
 
             if rate <= 0:
-                errors.append(f"Row {row_idx} ❌ Rate is missing or invalid (must be > 0).")
+                errors.append(f"Row {row_idx} ❌ Rate must be > 0.")
                 row_ok = False
 
             if not item_code:
                 errors.append(f"Row {row_idx} ❌ Item Code is empty.")
                 row_ok = False
             elif not frappe.db.exists("Item", item_code):
-                errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in ERPNext.")
+                errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found.")
                 row_ok = False
 
             if row_ok: ok_rows += 1
@@ -181,7 +172,15 @@ def run_po_creation(docname):
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row) or not row[col_map["po_num"]]: continue
             po_num = str(row[col_map["po_num"]]).strip()
-            po_map.setdefault(po_num, {"supplier": str(row[col_map["supplier"]]).strip(), "items": []})
+            
+            if po_num not in po_map:
+                po_map[po_num] = {
+                    "supplier": str(row[col_map["supplier"]]).strip(),
+                    "transaction_date": row[col_map["transaction_date"]] if col_map.get("transaction_date") is not None else None,
+                    "schedule_date": row[col_map["schedule_date"]] if col_map.get("schedule_date") is not None else None,
+                    "items": []
+                }
+            
             po_map[po_num]["items"].append({
                 "item_code": str(row[col_map["item_code"]]).strip(),
                 "qty": flt(row[col_map["quantity"]]),
@@ -193,17 +192,35 @@ def run_po_creation(docname):
         company = frappe.db.get_single_value("Global Defaults", "default_company")
         for p_num, data in po_map.items():
             po = frappe.new_doc("Purchase Order")
-            po.name = p_num  # Explicitly set the PO name from Excel
-            po.supplier, po.company = data["supplier"], company
+            po.name = p_num
+            po.supplier = data["supplier"]
+            po.company = company
+            
+            # Explicitly set dates from Excel if available
+            if data["transaction_date"]:
+                po.transaction_date = getdate(data["transaction_date"])
+            if data["schedule_date"]:
+                po.schedule_date = getdate(data["schedule_date"])
+            
+            # Trigger currency and other defaults from supplier
+            po.run_method("set_missing_values")
+            
             for item in data["items"]:
-                po.append("items", {"item_code": item["item_code"], "qty": item["qty"], "rate": item["rate"], "schedule_date": nowdate()})
+                po_item = po.append("items", {
+                    "item_code": item["item_code"],
+                    "qty": item["qty"],
+                    "rate": item["rate"]
+                })
+                # If Excel row has specific schedule date, use it for the item
+                if data["schedule_date"]:
+                    po_item.schedule_date = getdate(data["schedule_date"])
+
             po.insert(ignore_permissions=True)
             
             import re
             match = re.search(r'(\d+)$', p_num)
             base_number = match.group(1) if match else p_num
             
-            # Detect whether the field is 'line_number' or 'custom_line_number'
             line_field = "line_number"
             if po.items and not hasattr(po.items[0], "line_number"):
                 if hasattr(po.items[0], "custom_line_number"):
