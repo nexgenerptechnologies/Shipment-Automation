@@ -116,9 +116,8 @@ def run_po_validation(docname):
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
                 continue
             
-            # CHECK FOR DUPLICATE IN ERPNEXT (DRAFT OR SUBMITTED)
             if frappe.db.exists("Purchase Order", po_num):
-                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists in the system.")
+                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists.")
                 continue
                 
             row_ok = True
@@ -197,14 +196,11 @@ def run_po_creation(docname):
             po.supplier = data["supplier"]
             po.company = company
             
-            # Explicitly set dates from Excel if available
             if data["transaction_date"]:
                 po.transaction_date = getdate(data["transaction_date"])
             if data["schedule_date"]:
                 po.schedule_date = getdate(data["schedule_date"])
             
-            # Trigger currency and other defaults from supplier
-            # Use 'noset' for currency to force re-fetch from supplier
             for item in data["items"]:
                 po_item = po.append("items", {
                     "item_code": item["item_code"],
@@ -214,12 +210,13 @@ def run_po_creation(docname):
                 if data["schedule_date"]:
                     po_item.schedule_date = getdate(data["schedule_date"])
 
+            # Use standard insert with naming series bypass flag
             po.flags.ignore_permissions = True
             po.flags.ignore_links = True
-            po.__islocal = True
-            po.db_insert()
+            po.flags.ignore_validate = True
+            po.insert()
             
-            # Re-fetch the doc to trigger standard metadata setting without changing name
+            # Re-fetch and apply logic
             po = frappe.get_doc("Purchase Order", p_num)
             po.run_method("set_missing_values")
             po.save(ignore_permissions=True)
