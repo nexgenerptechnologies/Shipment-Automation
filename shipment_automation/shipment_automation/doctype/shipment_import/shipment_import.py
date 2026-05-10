@@ -138,7 +138,7 @@ def run_validation(docname):
             excel_series = str(row[5]).strip() if len(row) > 5 and row[5] else ""
             
             try:
-                po_parts = po_val_exc.split("-")
+                po_parts = po_val_exc.rsplit("-", 1)
                 base_po_num = po_parts[0]
                 line_idx = int(po_parts[1])
                 
@@ -255,7 +255,7 @@ def run_processing(docname):
             excel_series = str(row[5]).strip() if len(row) > 5 and row[5] else ""
 
             try:
-                po_parts = po_val_exc.split("-")
+                po_parts = po_val_exc.rsplit("-", 1)
                 base_po_num = po_parts[0]
                 line_idx = int(po_parts[1])
                 
