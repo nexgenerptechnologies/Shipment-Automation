@@ -7,10 +7,10 @@ from io import BytesIO
 
 @frappe.whitelist()
 def download_template():
-    """Generates and downloads the PO Import Excel template."""
+    """Generates and downloads the Bulk PO Import Excel template."""
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "PO Import Template"
+    ws.title = "Bulk PO Import Template"
     
     headers = [
         "Supplier", "Purchase Order Number", "Date", "Required By",
@@ -19,7 +19,6 @@ def download_template():
     ]
     ws.append(headers)
     
-    # Simple formatting for headers
     from openpyxl.styles import Font
     for cell in ws[1]:
         cell.font = Font(bold=True)
@@ -28,7 +27,7 @@ def download_template():
     wb.save(output)
     output.seek(0)
     
-    frappe.response['filename'] = "Shipment_PO_Import_Template.xlsx"
+    frappe.response['filename'] = "Bulk_PO_Import_Template.xlsx"
     frappe.response['filecontent'] = output.getvalue()
     frappe.response['type'] = 'binary'
 
@@ -154,7 +153,7 @@ def run_po_validation(docname):
         frappe.db.commit()
 
     except Exception:
-        frappe.log_error(frappe.get_traceback(), "Shipment PO Import – Validation Error")
+        frappe.log_error(frappe.get_traceback(), "Bulk PO Import – Validation Error")
         doc.db_set("status", "Failed")
         doc.db_set("creation_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
@@ -191,7 +190,6 @@ def run_po_creation(docname):
         created = []
         company = frappe.db.get_single_value("Global Defaults", "default_company")
         for p_num, data in po_map.items():
-            # Check if it was already created (in case of a partial previous run)
             if frappe.db.exists("Purchase Order", p_num):
                 created.append(f"⚠️ {p_num} already exists.")
                 continue
@@ -206,6 +204,11 @@ def run_po_creation(docname):
             if data["schedule_date"]:
                 po.schedule_date = getdate(data["schedule_date"])
             
+            # Explicitly set currency from supplier master before missing values
+            supplier_currency = frappe.db.get_value("Supplier", po.supplier, "default_currency")
+            if supplier_currency:
+                po.currency = supplier_currency
+
             po.run_method("set_missing_values")
             
             for item in data["items"]:
@@ -219,9 +222,10 @@ def run_po_creation(docname):
                     po_item.schedule_date = getdate(data["schedule_date"])
 
             po.flags.ignore_permissions = True
+            # Double check currency and exchange rate after items are added
+            po.run_method("set_missing_values")
             po.insert()
             
-            # Use the 'po' object directly instead of get_doc to set line numbers
             import re
             match = re.search(r'(\d+)$', p_num)
             base_number = match.group(1) if match else p_num
@@ -242,7 +246,7 @@ def run_po_creation(docname):
         frappe.db.commit()
 
     except Exception:
-        frappe.log_error(frappe.get_traceback(), "Shipment PO Import – Creation Error")
+        frappe.log_error(frappe.get_traceback(), "Bulk PO Import – Creation Error")
         doc.db_set("status", "Failed")
         doc.db_set("creation_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
