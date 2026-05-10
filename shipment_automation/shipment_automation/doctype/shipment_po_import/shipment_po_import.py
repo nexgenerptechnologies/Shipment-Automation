@@ -183,8 +183,17 @@ def run_po_creation(docname):
             import re
             match = re.search(r'(\d+)$', p_num)
             base_number = match.group(1) if match else p_num
+            
+            # Detect whether the field is 'line_number' or 'custom_line_number'
+            line_field = "line_number"
+            if po.items and not hasattr(po.items[0], "line_number"):
+                if hasattr(po.items[0], "custom_line_number"):
+                    line_field = "custom_line_number"
+
             for idx, item in enumerate(po.items, start=1):
-                item.db_set("line_number", data["items"][idx-1]["line_number"] or f"{base_number}-{idx}")
+                value = data["items"][idx-1]["line_number"] or f"{base_number}-{idx}"
+                item.db_set(line_field, value)
+            
             created.append(f"✅ {po.name} (Excel: {p_num})")
 
         doc.db_set("status", "Completed")
