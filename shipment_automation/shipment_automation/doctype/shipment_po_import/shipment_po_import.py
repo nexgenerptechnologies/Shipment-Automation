@@ -138,7 +138,11 @@ def run_po_validation(docname):
                 row_ok = False
 
             if qty <= 0:
-                errors.append(f"Row {row_idx} ❌ Quantity must be > 0.")
+                errors.append(f"Row {row_idx} ❌ Quantity is missing or invalid (must be > 0).")
+                row_ok = False
+
+            if rate <= 0:
+                errors.append(f"Row {row_idx} ❌ Rate is missing or invalid (must be > 0).")
                 row_ok = False
 
             if not item_code:
