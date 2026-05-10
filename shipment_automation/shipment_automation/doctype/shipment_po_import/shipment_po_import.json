@@ -8,7 +8,6 @@
  "field_order": [
   "supplier",
   "po_naming_series",
-  "item_naming_series",
   "po_excel",
   "status",
   "section_break_log",
@@ -33,19 +32,12 @@
    "description": "Select the Purchase Order naming series before uploading the Excel file."
   },
   {
-   "fieldname": "item_naming_series",
-   "fieldtype": "Select",
-   "label": "Item Naming Series",
-   "reqd": 1,
-   "description": "Select the series used to auto-generate codes for newly created items."
-  },
-  {
    "fieldname": "po_excel",
    "fieldtype": "Attach",
    "in_list_view": 1,
    "label": "PO Excel File",
    "reqd": 1,
-   "description": "Cols: A=Item Code, B=Item Name, C=Desc, D=UOM, E=Qty, F=Rate, G=Supplier, H=PO#, I=Item Group, J=HSN Code"
+   "description": "Cols: A=Item Code, B=Item Name, C=Desc, D=UOM, E=Qty, F=Rate, G=Supplier, H=PO#, I=Line Number"
   },
   {
    "default": "Draft",

@@ -15,19 +15,6 @@ frappe.ui.form.on("Shipment PO Import", {
                 }
             }
         });
-        
-        // Populate Item naming series dynamically
-        frappe.call({
-            method: UTILS,
-            args: { doctype: "Item" },
-            callback: function (r) {
-                if (r.message && r.message.length) {
-                    frm.set_df_property("item_naming_series", "options",
-                        [""].concat(r.message).join("\n"));
-                    frm.refresh_field("item_naming_series");
-                }
-            }
-        });
 
         frm.set_df_property("po_excel", "read_only",
             frm.doc.po_naming_series ? 0 : 1);

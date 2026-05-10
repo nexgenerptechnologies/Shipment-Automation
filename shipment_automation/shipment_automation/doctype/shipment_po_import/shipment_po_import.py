@@ -15,7 +15,7 @@ def download_template():
     headers = [
         "Supplier", "Purchase Order Number", "Date", "Required By",
         "Item Code", "Item Name", "Description", "Quantity",
-        "Rate", "Item Group", "HSN/SAC", "Line Number"
+        "Rate", "Line Number"
     ]
     ws.append(headers)
     
@@ -39,8 +39,6 @@ class ShipmentPOImport(Document):
     def start_validation(self):
         if not self.po_naming_series:
             frappe.throw("Please select a PO Naming Series before uploading.")
-        if not self.item_naming_series:
-            frappe.throw("Please select an Item Naming Series before uploading.")
         self.db_set("status", "Validating")
         self.db_set("creation_log", "⏳ Validation in progress. Please refresh in a few seconds.")
         frappe.db.commit()
@@ -64,20 +62,6 @@ class ShipmentPOImport(Document):
         return "Purchase Order creation started. Refresh in a few seconds."
 
 
-def find_duplicate_item(e_code, e_name, e_desc):
-    """Checks if an item matching 2 out of 3 fields exists."""
-    if e_code and e_name:
-        res = frappe.db.get_value("Item", {"name": e_code, "item_name": e_name}, "name")
-        if res: return res
-    if e_code and e_desc:
-        res = frappe.db.get_value("Item", {"name": e_code, "description": e_desc}, "name")
-        if res: return res
-    if e_name and e_desc:
-        res = frappe.db.get_value("Item", {"item_name": e_name, "description": e_desc}, "name")
-        if res: return res
-    return None
-
-
 def get_column_map(sheet):
     """Maps header names to column indices."""
     header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
@@ -92,8 +76,6 @@ def get_column_map(sheet):
         "description": ["Description"],
         "quantity": ["Quantity", "Qty"],
         "rate": ["Rate", "Price"],
-        "item_group": ["Item Group"],
-        "hsn_sac": ["HSN/SAC", "HSN Code", "SAC Code"],
         "line_number": ["Line Number", "Line #"]
     }
     
@@ -122,20 +104,15 @@ def run_po_validation(docname):
 
         errors = []
         ok_rows = 0
-        items_to_create = []
 
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row): continue
 
             item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None and row[col_map["item_code"]] else ""
-            item_name = str(row[col_map["item_name"]]).strip() if col_map.get("item_name") is not None and row[col_map["item_name"]] else ""
-            desc      = str(row[col_map["description"]]).strip() if col_map.get("description") is not None and row[col_map["description"]] else ""
             qty       = flt(row[col_map["quantity"]]) if col_map.get("quantity") is not None else 0
             rate      = flt(row[col_map["rate"]]) if col_map.get("rate") is not None else 0
             supplier  = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None and row[col_map["supplier"]] else ""
             po_num    = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None and row[col_map["po_num"]] else ""
-            item_group = str(row[col_map["item_group"]]).strip() if col_map.get("item_group") is not None and row[col_map["item_group"]] else ""
-            hsn_code   = str(row[col_map["hsn_sac"]]).strip() if col_map.get("hsn_sac") is not None and row[col_map["hsn_sac"]] else ""
 
             if not po_num:
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
@@ -153,33 +130,15 @@ def run_po_validation(docname):
             if not item_code:
                 errors.append(f"Row {row_idx} ❌ Item Code is empty.")
                 row_ok = False
-            else:
-                if not frappe.db.exists("Item", item_code):
-                    duplicate = find_duplicate_item(item_code, item_name, desc)
-                    if duplicate:
-                        errors.append(f"Row {row_idx} ❌ Duplicate Found: Item '{duplicate}'. Update Excel Item Code to match.")
-                        row_ok = False
-                    else:
-                        if not item_group or not hsn_code:
-                            errors.append(f"Row {row_idx} ❌ New Item '{item_code}' requires Item Group and HSN/SAC.")
-                            row_ok = False
-                        else:
-                            if not frappe.db.exists("Item Group", item_group):
-                                errors.append(f"Row {row_idx} ❌ Item Group '{item_group}' not found in system.")
-                                row_ok = False
-                            
-                            if not any(i['item_code'] == item_code for i in items_to_create):
-                                items_to_create.append({"item_code": item_code, "item_name": item_name or item_code, "description": desc, "item_group": item_group, "hsn_code": hsn_code, "uom": "Nos"})
+            elif not frappe.db.exists("Item", item_code):
+                errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in ERPNext. Item creation is disabled.")
+                row_ok = False
 
             if row_ok: ok_rows += 1
 
         if not errors:
-            log = [f"✅ {ok_rows} row(s) validated."]
-            if items_to_create:
-                log.append(f"\n✨ {len(items_to_create)} New Items will be created:")
-                for it in items_to_create: log.append(f"  • {it['item_code']} | {it['item_name']}")
             doc.db_set("status", "Validated")
-            doc.db_set("creation_log", "\n".join(log))
+            doc.db_set("creation_log", f"✅ {ok_rows} row(s) validated successfully.")
         else:
             doc.db_set("status", "Draft")
             doc.db_set("creation_log", f"❌ Issues found:\n\n" + "\n".join(errors))
@@ -200,29 +159,13 @@ def run_po_creation(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
 
-        item_mapping = {}
-        for row in sheet.iter_rows(min_row=2, values_only=True):
-            if not any(row): continue
-            item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None and row[col_map["item_code"]] else ""
-            if item_code and not frappe.db.exists("Item", item_code):
-                if item_code not in item_mapping:
-                    new_item = frappe.new_doc("Item")
-                    new_item.naming_series = doc.item_naming_series
-                    new_item.item_name = str(row[col_map["item_name"]]).strip() if col_map.get("item_name") is not None and row[col_map["item_name"]] else item_code
-                    new_item.description = str(row[col_map["description"]]).strip() if col_map.get("description") is not None and row[col_map["description"]] else ""
-                    new_item.item_group = str(row[col_map["item_group"]]).strip() if col_map.get("item_group") is not None and row[col_map["item_group"]] else ""
-                    new_item.gst_hsn_code = str(row[col_map["hsn_sac"]]).strip() if col_map.get("hsn_sac") is not None and row[col_map["hsn_sac"]] else ""
-                    new_item.stock_uom = "Nos"
-                    new_item.insert(ignore_permissions=True)
-                    item_mapping[item_code] = new_item.name
-
         po_map = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row) or not row[col_map["po_num"]]: continue
             po_num = str(row[col_map["po_num"]]).strip()
             po_map.setdefault(po_num, {"supplier": str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else doc.supplier, "items": []})
             po_map[po_num]["items"].append({
-                "item_code": item_mapping.get(str(row[col_map["item_code"]]).strip(), str(row[col_map["item_code"]]).strip()),
+                "item_code": str(row[col_map["item_code"]]).strip(),
                 "qty": flt(row[col_map["quantity"]]),
                 "rate": flt(row[col_map["rate"]]),
                 "line_number": str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
