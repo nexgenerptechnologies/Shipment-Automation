@@ -2,6 +2,35 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import flt, nowdate
 import openpyxl
+from io import BytesIO
+
+
+@frappe.whitelist()
+def download_template():
+    """Generates and downloads the PO Import Excel template."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "PO Import Template"
+    
+    headers = [
+        "Supplier", "Purchase Order Number", "Date", "Required By",
+        "Item Code", "Item Name", "Description", "Quantity",
+        "Rate", "Item Group", "HSN/SAC", "Line Number"
+    ]
+    ws.append(headers)
+    
+    # Simple formatting for headers
+    from openpyxl.styles import Font
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    frappe.response['filename'] = "Shipment_PO_Import_Template.xlsx"
+    frappe.response['filecontent'] = output.getvalue()
+    frappe.response['type'] = 'binary'
 
 
 class ShipmentPOImport(Document):

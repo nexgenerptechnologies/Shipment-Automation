@@ -60,6 +60,13 @@ frappe.ui.form.on("Shipment PO Import", {
             frm.dashboard.add_comment(banner[frm.doc.status][0], banner[frm.doc.status][1], true);
         }
 
+        // Download Template button
+        frm.add_custom_button(__("Download Template"), function () {
+            window.open(frappe.urllib.get_full_url(
+                "/api/method/shipment_automation.shipment_automation.doctype.shipment_po_import.shipment_po_import.download_template"
+            ));
+        }, __("Actions"));
+
         // Validate Data
         if (frm.doc.po_excel && frm.doc.po_naming_series && frm.doc.status === "Draft") {
             frm.add_custom_button(__("Validate Data"), function () {
