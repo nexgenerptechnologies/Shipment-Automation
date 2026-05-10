@@ -101,8 +101,6 @@ def run_po_validation(docname):
 
         errors = []
         ok_rows = 0
-
-        # Used for checking duplicate PO Number within the SAME Excel file
         po_supplier_map = {}
 
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
@@ -118,14 +116,13 @@ def run_po_validation(docname):
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
                 continue
             
-            # ── Check Duplicate PO Number for DIFFERENT Suppliers in same Excel ──
             if po_num in po_supplier_map and po_supplier_map[po_num] != supplier:
-                errors.append(f"Row {row_idx} ❌ PO '{po_num}' is used for multiple suppliers in this file ({po_supplier_map[po_num]} vs {supplier}).")
+                errors.append(f"Row {row_idx} ❌ PO '{po_num}' is used for multiple suppliers.")
                 continue
             po_supplier_map[po_num] = supplier
             
             if frappe.db.exists("Purchase Order", po_num):
-                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists in system.")
+                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists.")
                 continue
                 
             row_ok = True
@@ -203,9 +200,9 @@ def run_po_creation(docname):
                 created.append(f"⚠️ {p_num} already exists.")
                 continue
 
+            # ── NEW APPROACH: Manual object construction to force name ──
             po = frappe.new_doc("Purchase Order")
-            # ── CRITICAL: Manual Name Assignment for exact PO Number match ──
-            po.name = p_num 
+            po.name = p_num
             po.supplier = data["supplier"]
             po.company = company
             
@@ -214,14 +211,20 @@ def run_po_creation(docname):
             if data["schedule_date"]:
                 po.schedule_date = getdate(data["schedule_date"])
             
-            # Fetch default tax category and currency from supplier
+            # Fetch basic supplier/address info
             po.run_method("set_missing_values")
             
-            supplier_currency = frappe.db.get_value("Supplier", po.supplier, "default_currency")
-            if supplier_currency:
-                po.currency = supplier_currency
+            # ── FIX: Taxes, Category & GST ──
+            # Re-fetch from master to ensure everything is synced
+            supplier_master = frappe.get_doc("Supplier", po.supplier)
+            if supplier_master.tax_category:
+                po.tax_category = supplier_master.tax_category
+            if supplier_master.purchase_taxes_and_charges_template:
+                po.taxes_and_charges = supplier_master.purchase_taxes_and_charges_template
+            if supplier_master.default_currency:
+                po.currency = supplier_master.default_currency
 
-            # Trigger missing values again to fetch tax templates based on Category
+            # Force re-trigger to fetch taxes based on template
             po.run_method("set_missing_values")
             
             if not po.conversion_rate:
@@ -234,14 +237,19 @@ def run_po_creation(docname):
                     "rate": item["rate"]
                 })
                 po_item.run_method("set_missing_values")
-                if data["schedule_date"]:
-                    po_item.schedule_date = getdate(data["schedule_date"])
 
             po.flags.ignore_permissions = True
-            # Final run to fetch taxes and calculate totals
             po.run_method("set_missing_values")
-            po.insert()
+            # Final check to ensure totals include taxes
+            po.run_method("calculate_taxes_and_totals")
             
+            # Use 'db_insert' to force the name from excel
+            po.db_insert()
+            
+            # Run hooks like 'on_update' manually to ensure standard behavior
+            po.run_method("on_update")
+            
+            # Set custom line numbers
             import re
             match = re.search(r'(\d+)$', p_num)
             base_number = match.group(1) if match else p_num
