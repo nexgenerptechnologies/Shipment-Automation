@@ -1,4 +1,4 @@
-frappe.ui.form.on("Shipment PO Import", {
+frappe.ui.form.on("Bulk PO Import", {
 
     refresh: function (frm) {
         const banner = {
@@ -14,7 +14,7 @@ frappe.ui.form.on("Shipment PO Import", {
         // Download Template button
         frm.add_custom_button(__("Download Template"), function () {
             window.open(frappe.urllib.get_full_url(
-                "/api/method/shipment_automation.shipment_automation.doctype.shipment_po_import.shipment_po_import.download_template"
+                "/api/method/shipment_automation.shipment_automation.doctype.bulk_po_import.bulk_po_import.download_template"
             ));
         }, __("Actions"));
 

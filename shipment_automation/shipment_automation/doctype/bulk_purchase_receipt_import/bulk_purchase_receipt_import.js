@@ -1,6 +1,6 @@
 const UTILS = "shipment_automation.shipment_automation.utils.get_naming_series";
 
-frappe.ui.form.on('Shipment Import', {
+frappe.ui.form.on('Bulk Purchase Receipt Import', {
 
     onload: function (frm) {
         // Populate PR naming series dynamically
