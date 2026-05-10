@@ -48,6 +48,35 @@ def find_duplicate_item(e_code, e_name, e_desc):
         if res: return res
     return None
 
+
+def get_column_map(sheet):
+    """Maps header names to column indices."""
+    header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+    mapping = {}
+    expected_headers = {
+        "supplier": ["Supplier", "Supplier Name"],
+        "po_num": ["Purchase Order Number", "PO Number", "PO #"],
+        "date": ["Date", "Posting Date"],
+        "required_by": ["Required By", "Delivery Date"],
+        "item_code": ["Item Code", "Item"],
+        "item_name": ["Item Name"],
+        "description": ["Description"],
+        "quantity": ["Quantity", "Qty"],
+        "rate": ["Rate", "Price"],
+        "item_group": ["Item Group"],
+        "hsn_sac": ["HSN/SAC", "HSN Code", "SAC Code"],
+        "line_number": ["Line Number", "Line #"]
+    }
+    
+    for idx, cell_value in enumerate(header_row):
+        if not cell_value: continue
+        clean_val = str(cell_value).strip().lower()
+        for key, aliases in expected_headers.items():
+            if any(alias.lower() == clean_val for alias in aliases):
+                mapping[key] = idx
+    return mapping
+
+
 def run_po_validation(docname):
     doc = frappe.get_doc("Shipment PO Import", docname)
     try:
@@ -55,99 +84,78 @@ def run_po_validation(docname):
         wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
         sheet = wb.active
 
+        col_map = get_column_map(sheet)
+        required_cols = ["item_code", "quantity", "rate", "po_num"]
+        missing_cols = [c for c in required_cols if c not in col_map]
+        
+        if missing_cols:
+            frappe.throw(f"Missing required columns in Excel: {', '.join(missing_cols)}")
+
         errors = []
         ok_rows = 0
         items_to_create = []
 
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-            if not any(row):
-                continue
+            if not any(row): continue
 
-            item_code = str(row[0]).strip() if len(row) > 0 and row[0] else ""
-            item_name = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-            desc      = str(row[2]).strip() if len(row) > 2 and row[2] else ""
-            uom       = str(row[3]).strip() if len(row) > 3 and row[3] else "Pcs"
-            qty       = flt(row[4]) if len(row) > 4 else 0
-            rate      = flt(row[5]) if len(row) > 5 else 0
-            supplier  = str(row[6]).strip() if len(row) > 6 and row[6] else ""
-            po_num    = str(row[7]).strip() if len(row) > 7 and row[7] else ""
-            
-            item_group = str(row[8]).strip() if len(row) > 8 and row[8] else ""
-            hsn_code   = str(row[9]).strip() if len(row) > 9 and row[9] else ""
+            item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None and row[col_map["item_code"]] else ""
+            item_name = str(row[col_map["item_name"]]).strip() if col_map.get("item_name") is not None and row[col_map["item_name"]] else ""
+            desc      = str(row[col_map["description"]]).strip() if col_map.get("description") is not None and row[col_map["description"]] else ""
+            qty       = flt(row[col_map["quantity"]]) if col_map.get("quantity") is not None else 0
+            rate      = flt(row[col_map["rate"]]) if col_map.get("rate") is not None else 0
+            supplier  = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None and row[col_map["supplier"]] else ""
+            po_num    = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None and row[col_map["po_num"]] else ""
+            item_group = str(row[col_map["item_group"]]).strip() if col_map.get("item_group") is not None and row[col_map["item_group"]] else ""
+            hsn_code   = str(row[col_map["hsn_sac"]]).strip() if col_map.get("hsn_sac") is not None and row[col_map["hsn_sac"]] else ""
 
             if not po_num:
-                errors.append(f"Row {row_idx} ❌  PO Number (Col H) is missing.")
+                errors.append(f"Row {row_idx} ❌ PO Number is missing.")
                 continue
                 
             row_ok = True
-
-            if not supplier:
-                errors.append(f"Row {row_idx} ❌  Supplier (Col G) is empty.")
-                row_ok = False
-            elif not frappe.db.exists("Supplier", supplier):
-                errors.append(f"Row {row_idx} ❌  Supplier '{supplier}' not found in ERPNext.")
+            if supplier and not frappe.db.exists("Supplier", supplier):
+                errors.append(f"Row {row_idx} ❌ Supplier '{supplier}' not found.")
                 row_ok = False
 
             if qty <= 0:
-                errors.append(f"Row {row_idx} ❌  Quantity must be > 0. Got: {qty}")
-                row_ok = False
-            if rate < 0:
-                errors.append(f"Row {row_idx} ❌  Rate cannot be negative. Got: {rate}")
+                errors.append(f"Row {row_idx} ❌ Quantity must be > 0.")
                 row_ok = False
 
-            # Item Check Logic
             if not item_code:
-                errors.append(f"Row {row_idx} ❌  Item Code (Col A) is empty.")
+                errors.append(f"Row {row_idx} ❌ Item Code is empty.")
                 row_ok = False
             else:
-                if frappe.db.exists("Item", item_code):
-                    pass # Item exists perfectly, all good
-                else:
-                    # Check for 2-out-of-3 duplicate
+                if not frappe.db.exists("Item", item_code):
                     duplicate = find_duplicate_item(item_code, item_name, desc)
                     if duplicate:
-                        errors.append(f"Row {row_idx} ❌  Duplicate Item Found: ERPNext Item '{duplicate}' has the same Name/Description. Please update Excel Item Code to '{duplicate}' instead of creating a duplicate.")
+                        errors.append(f"Row {row_idx} ❌ Duplicate Found: Item '{duplicate}'. Update Excel Item Code to match.")
                         row_ok = False
                     else:
-                        # Genuine New Item
                         if not item_group or not hsn_code:
-                            errors.append(f"Row {row_idx} ❌  New Item '{item_code}' needs to be created. Please add Item Group (Col I) and HSN/SAC Code (Col J).")
+                            errors.append(f"Row {row_idx} ❌ New Item '{item_code}' requires Item Group and HSN/SAC.")
                             row_ok = False
                         else:
                             if not any(i['item_code'] == item_code for i in items_to_create):
-                                items_to_create.append({
-                                    "item_code": item_code,
-                                    "item_name": item_name or item_code,
-                                    "description": desc,
-                                    "item_group": item_group,
-                                    "hsn_code": hsn_code,
-                                    "uom": "Pcs"
-                                })
+                                items_to_create.append({"item_code": item_code, "item_name": item_name or item_code, "description": desc, "item_group": item_group, "hsn_code": hsn_code, "uom": "Pcs"})
 
-            if row_ok:
-                ok_rows += 1
+            if row_ok: ok_rows += 1
 
         if not errors:
-            log_parts = [f"✅ All {ok_rows} row(s) validated successfully."]
+            log = [f"✅ {ok_rows} row(s) validated."]
             if items_to_create:
-                log_parts.append(f"\n✨ {len(items_to_create)} New Items will be created:")
-                for it in items_to_create:
-                    log_parts.append(f"  • {it['item_code']} | {it['item_name']} | {it['description']}")
-            
+                log.append(f"\n✨ {len(items_to_create)} New Items will be created:")
+                for it in items_to_create: log.append(f"  • {it['item_code']} | {it['item_name']}")
             doc.db_set("status", "Validated")
-            doc.db_set("creation_log", "\n".join(log_parts))
+            doc.db_set("creation_log", "\n".join(log))
         else:
-            log = f"❌ {len(errors)} issue(s) found ({ok_rows} OK):\n\n" + "\n".join(errors)
             doc.db_set("status", "Failed")
-            doc.db_set("creation_log", log)
-
+            doc.db_set("creation_log", f"❌ Issues found:\n\n" + "\n".join(errors))
         frappe.db.commit()
 
     except Exception:
-        err = frappe.get_traceback()
-        frappe.log_error(err, "Shipment PO Import – Validation Error")
+        frappe.log_error(frappe.get_traceback(), "Shipment PO Import – Validation Error")
         doc.db_set("status", "Failed")
-        doc.db_set("creation_log", f"❌ System error:\n{err}")
+        doc.db_set("creation_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
 
 
@@ -157,131 +165,58 @@ def run_po_creation(docname):
         file_doc = frappe.get_doc("File", {"file_url": doc.po_excel})
         wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
         sheet = wb.active
+        col_map = get_column_map(sheet)
 
-        # Step 1: Find and create new items
-        items_to_create = {}
-        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+        item_mapping = {}
+        for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
-            item_code = str(row[0]).strip() if len(row) > 0 and row[0] else ""
+            item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None and row[col_map["item_code"]] else ""
             if item_code and not frappe.db.exists("Item", item_code):
-                item_name = str(row[1]).strip() if len(row) > 1 and row[1] else item_code
-                desc      = str(row[2]).strip() if len(row) > 2 and row[2] else ""
-                item_group = str(row[8]).strip() if len(row) > 8 and row[8] else ""
-                hsn_code   = str(row[9]).strip() if len(row) > 9 and row[9] else ""
-                
-                if item_code not in items_to_create:
-                    items_to_create[item_code] = {
-                        "item_name": item_name,
-                        "description": desc,
-                        "item_group": item_group,
-                        "gst_hsn_code": hsn_code,
-                        "stock_uom": "Pcs"
-                    }
+                if item_code not in item_mapping:
+                    new_item = frappe.new_doc("Item")
+                    new_item.naming_series = doc.item_naming_series
+                    new_item.item_name = str(row[col_map["item_name"]]).strip() if col_map.get("item_name") is not None and row[col_map["item_name"]] else item_code
+                    new_item.description = str(row[col_map["description"]]).strip() if col_map.get("description") is not None and row[col_map["description"]] else ""
+                    new_item.item_group = str(row[col_map["item_group"]]).strip() if col_map.get("item_group") is not None and row[col_map["item_group"]] else ""
+                    new_item.gst_hsn_code = str(row[col_map["hsn_sac"]]).strip() if col_map.get("hsn_sac") is not None and row[col_map["hsn_sac"]] else ""
+                    new_item.stock_uom = "Pcs"
+                    new_item.insert(ignore_permissions=True)
+                    item_mapping[item_code] = new_item.name
 
-        created_items_log = []
-        item_mapping = {} # maps excel_code -> erpnext_code
-        
-        for excel_code, idata in items_to_create.items():
-            new_item = frappe.new_doc("Item")
-            new_item.naming_series = doc.item_naming_series
-            new_item.item_name = idata["item_name"]
-            new_item.description = idata["description"]
-            new_item.item_group = idata["item_group"]
-            new_item.gst_hsn_code = idata["gst_hsn_code"]
-            new_item.stock_uom = idata["stock_uom"]
-            new_item.insert(ignore_permissions=True)
-            
-            item_mapping[excel_code] = new_item.name
-            created_items_log.append(f"✨ Created Item: {new_item.name} (from Excel Code: {excel_code})")
-
-        # Step 2: Build POs
         po_map = {}
-        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-            if not any(row) or not row[7]:
-                continue
-
-            excel_code  = str(row[0]).strip() if len(row) > 0 and row[0] else ""
-            qty         = flt(row[4]) if len(row) > 4 else 0
-            rate        = flt(row[5]) if len(row) > 5 else 0
-            supplier    = str(row[6]).strip() if len(row) > 6 and row[6] else ""
-            po_num      = str(row[7]).strip()
-            line_number = str(row[10]).strip() if len(row) > 10 and row[10] else ""
-
-            if not excel_code or not supplier or qty <= 0:
-                continue
-                
-            actual_item_code = item_mapping.get(excel_code, excel_code)
-
-            po_map.setdefault(po_num, {"supplier": supplier, "items": []})
-            po_map[po_num]["items"].append(
-                {
-                 "item_code": actual_item_code,
-                 "qty": qty, 
-                 "rate": rate,
-                 "line_number": line_number
-                }
-            )
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            if not any(row) or not row[col_map["po_num"]]: continue
+            po_num = str(row[col_map["po_num"]]).strip()
+            po_map.setdefault(po_num, {"supplier": str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else doc.supplier, "items": []})
+            po_map[po_num]["items"].append({
+                "item_code": item_mapping.get(str(row[col_map["item_code"]]).strip(), str(row[col_map["item_code"]]).strip()),
+                "qty": flt(row[col_map["quantity"]]),
+                "rate": flt(row[col_map["rate"]]),
+                "line_number": str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
+            })
 
         created = []
-        errors = []
-        default_company = frappe.db.get_single_value("Global Defaults", "default_company")
-
-        for po_num, data in po_map.items():
-            try:
-                po = frappe.new_doc("Purchase Order")
-                po.naming_series   = doc.po_naming_series
-                po.supplier        = data["supplier"]
-                po.transaction_date = nowdate()
-                po.schedule_date   = nowdate()
-                po.company         = default_company
-
-                for item in data["items"]:
-                    po.append("items", {
-                        "item_code":     item["item_code"],
-                        "qty":           item["qty"],
-                        "rate":          item["rate"],
-                        "schedule_date": nowdate(),
-                    })
-
-                po.insert(ignore_permissions=True)
-                
-                # Extract the base number from the Excel PO number (po_num)
-                import re
-                match = re.search(r'(\d+)$', po_num)
-                base_number = match.group(1) if match else po_num
-
-                # Populate the custom line_number field for each item
-                for idx, item in enumerate(po.items, start=1):
-                    excel_line_num = data["items"][idx-1].get("line_number")
-                    if excel_line_num:
-                        item.db_set("line_number", excel_line_num)
-                    else:
-                        item.db_set("line_number", f"{base_number}-{idx}")
-                    
-                created.append(
-                    f"✅  {po.name} | Excel PO#: {po_num} | "
-                    f"Supplier: {data['supplier']} | {len(data['items'])} line(s)"
-                )
-            except Exception as exc:
-                errors.append(f"❌  Excel PO# {po_num}: {exc}")
-                frappe.log_error(frappe.get_traceback(), f"Shipment PO Import – {po_num}")
-
-        log_parts = []
-        if created_items_log:
-            log_parts.append("NEW ITEMS CREATED:\n" + "\n".join(created_items_log) + "\n")
+        company = frappe.db.get_single_value("Global Defaults", "default_company")
+        for p_num, data in po_map.items():
+            po = frappe.new_doc("Purchase Order")
+            po.naming_series, po.supplier, po.company = doc.po_naming_series, data["supplier"], company
+            for item in data["items"]:
+                po.append("items", {"item_code": item["item_code"], "qty": item["qty"], "rate": item["rate"], "schedule_date": nowdate()})
+            po.insert(ignore_permissions=True)
             
-        if created:
-            log_parts.append(f"PURCHASE ORDERS CREATED ({len(created)}):\n" + "\n".join(created))
-        if errors:
-            log_parts.append("ERRORS:\n" + "\n".join(errors))
+            import re
+            match = re.search(r'(\d+)$', p_num)
+            base_number = match.group(1) if match else p_num
+            for idx, item in enumerate(po.items, start=1):
+                item.db_set("line_number", data["items"][idx-1]["line_number"] or f"{base_number}-{idx}")
+            created.append(f"✅ {po.name} (Excel: {p_num})")
 
-        doc.db_set("status", "Completed" if not errors else "Failed")
-        doc.db_set("creation_log", "\n\n".join(log_parts) or "No POs created.")
+        doc.db_set("status", "Completed")
+        doc.db_set("creation_log", "CREATED:\n" + "\n".join(created))
         frappe.db.commit()
 
     except Exception:
-        err = frappe.get_traceback()
-        frappe.log_error(err, "Shipment PO Import – Creation Error")
+        frappe.log_error(frappe.get_traceback(), "Shipment PO Import – Creation Error")
         doc.db_set("status", "Failed")
-        doc.db_set("creation_log", f"❌ System error:\n{err}")
+        doc.db_set("creation_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
