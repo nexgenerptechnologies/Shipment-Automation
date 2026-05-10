@@ -4,7 +4,7 @@ frappe.ui.form.on("Shipment PO Import", {
         const banner = {
             Validating: ["⏳ Validation running... Refresh in a few seconds.", "yellow"],
             Processing: ["⏳ Creating Purchase Orders... Refresh in a few seconds.", "yellow"],
-            Completed:  ["✅ Purchase Orders created as Draft. Review and submit in ERPNext.", "green"],
+            Completed:  ["✅ Purchase Orders created as Draft. Review and submit.", "green"],
             Failed:     ["❌ An error occurred. See the log below.", "red"],
         };
         if (banner[frm.doc.status]) {

@@ -116,8 +116,9 @@ def run_po_validation(docname):
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
                 continue
             
+            # CHECK FOR DUPLICATE IN ERPNEXT (DRAFT OR SUBMITTED)
             if frappe.db.exists("Purchase Order", po_num):
-                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists.")
+                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists in the system.")
                 continue
                 
             row_ok = True
@@ -203,7 +204,16 @@ def run_po_creation(docname):
                 po.schedule_date = getdate(data["schedule_date"])
             
             # Trigger currency and other defaults from supplier
+            # Use 'noset' for currency to force re-fetch from supplier
+            po.currency = None 
             po.run_method("set_missing_values")
+            
+            # Double check currency from supplier master
+            supplier_currency = frappe.db.get_value("Supplier", po.supplier, "default_currency")
+            if supplier_currency:
+                po.currency = supplier_currency
+                # Re-run to ensure exchange rate and fields update to this currency
+                po.run_method("set_missing_values")
             
             for item in data["items"]:
                 po_item = po.append("items", {
@@ -211,7 +221,6 @@ def run_po_creation(docname):
                     "qty": item["qty"],
                     "rate": item["rate"]
                 })
-                # If Excel row has specific schedule date, use it for the item
                 if data["schedule_date"]:
                     po_item.schedule_date = getdate(data["schedule_date"])
 
