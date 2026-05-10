@@ -205,6 +205,7 @@ def run_po_creation(docname):
             rate        = flt(row[5]) if len(row) > 5 else 0
             supplier    = str(row[6]).strip() if len(row) > 6 and row[6] else ""
             po_num      = str(row[7]).strip()
+            line_number = str(row[10]).strip() if len(row) > 10 and row[10] else ""
 
             if not excel_code or not supplier or qty <= 0:
                 continue
@@ -216,7 +217,8 @@ def run_po_creation(docname):
                 {
                  "item_code": actual_item_code,
                  "qty": qty, 
-                 "rate": rate
+                 "rate": rate,
+                 "line_number": line_number
                 }
             )
 
@@ -243,9 +245,18 @@ def run_po_creation(docname):
 
                 po.insert(ignore_permissions=True)
                 
+                # Extract the base number from the Excel PO number (po_num)
+                import re
+                match = re.search(r'(\d+)$', po_num)
+                base_number = match.group(1) if match else po_num
+
                 # Populate the custom line_number field for each item
                 for idx, item in enumerate(po.items, start=1):
-                    item.db_set("line_number", f"{po_num}-{idx}")
+                    excel_line_num = data["items"][idx-1].get("line_number")
+                    if excel_line_num:
+                        item.db_set("line_number", excel_line_num)
+                    else:
+                        item.db_set("line_number", f"{base_number}-{idx}")
                     
                 created.append(
                     f"✅  {po.name} | Excel PO#: {po_num} | "
