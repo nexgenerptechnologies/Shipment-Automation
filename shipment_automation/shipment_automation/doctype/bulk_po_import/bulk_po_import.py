@@ -200,7 +200,6 @@ def run_po_creation(docname):
                 created.append(f"⚠️ {p_num} already exists.")
                 continue
 
-            # ── NEW APPROACH: Manual object construction to force name ──
             po = frappe.new_doc("Purchase Order")
             po.name = p_num
             po.supplier = data["supplier"]
@@ -211,22 +210,10 @@ def run_po_creation(docname):
             if data["schedule_date"]:
                 po.schedule_date = getdate(data["schedule_date"])
             
-            # Fetch basic supplier/address info
+            # Fetch default values (Category, Currency, Taxes) from master
             po.run_method("set_missing_values")
             
-            # ── FIX: Taxes, Category & GST ──
-            # Re-fetch from master to ensure everything is synced
-            supplier_master = frappe.get_doc("Supplier", po.supplier)
-            if supplier_master.tax_category:
-                po.tax_category = supplier_master.tax_category
-            if supplier_master.purchase_taxes_and_charges_template:
-                po.taxes_and_charges = supplier_master.purchase_taxes_and_charges_template
-            if supplier_master.default_currency:
-                po.currency = supplier_master.default_currency
-
-            # Force re-trigger to fetch taxes based on template
-            po.run_method("set_missing_values")
-            
+            # Ensure totals are calculated after taxes are fetched
             if not po.conversion_rate:
                 po.conversion_rate = 1.0
             
@@ -239,14 +226,12 @@ def run_po_creation(docname):
                 po_item.run_method("set_missing_values")
 
             po.flags.ignore_permissions = True
+            # Final calculation for taxes and totals
             po.run_method("set_missing_values")
-            # Final check to ensure totals include taxes
             po.run_method("calculate_taxes_and_totals")
             
             # Use 'db_insert' to force the name from excel
             po.db_insert()
-            
-            # Run hooks like 'on_update' manually to ensure standard behavior
             po.run_method("on_update")
             
             # Set custom line numbers
