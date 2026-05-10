@@ -201,30 +201,27 @@ def run_po_creation(docname):
             if data["schedule_date"]:
                 po.schedule_date = getdate(data["schedule_date"])
             
-            # Use 'set_missing_values' BEFORE appending items to populate currency/exchange rates
+            # Fetch supplier defaults first
             po.run_method("set_missing_values")
             
             for item in data["items"]:
-                # Using po.append instead of raw dict to trigger item defaults
                 po_item = po.append("items", {
                     "item_code": item["item_code"],
                     "qty": item["qty"],
                     "rate": item["rate"]
                 })
-                # Trigger item-level defaults (UOM, conversion factor, etc.)
+                # Trigger item-level defaults
                 po_item.run_method("set_missing_values")
-                
                 if data["schedule_date"]:
                     po_item.schedule_date = getdate(data["schedule_date"])
 
-            # Use standard insert with naming series bypass flag
+            # Use standard insert to save the document properly
+            # We don't use ignore_mandatory here anymore to let it calculate conversion rates properly
             po.flags.ignore_permissions = True
-            po.flags.ignore_mandatory = True # Bypass mandatory check during initial insert
             po.insert()
             
-            # Final save to ensure all fields are calculated and validated
+            # Re-fetch for line number setting
             po = frappe.get_doc("Purchase Order", p_num)
-            po.save(ignore_permissions=True)
             
             import re
             match = re.search(r'(\d+)$', p_num)
