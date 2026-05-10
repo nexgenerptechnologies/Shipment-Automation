@@ -32,7 +32,7 @@ def download_template():
     frappe.response['type'] = 'binary'
 
 
-class ShipmentPOImport(Document):
+class BulkPOImport(Document):
 
     @frappe.whitelist()
     def start_validation(self):
@@ -40,7 +40,7 @@ class ShipmentPOImport(Document):
         self.db_set("creation_log", "⏳ Validation in progress. Please refresh in a few seconds.")
         frappe.db.commit()
         frappe.enqueue(
-            "shipment_automation.shipment_automation.doctype.shipment_po_import.shipment_po_import.run_po_validation",
+            "shipment_automation.shipment_automation.doctype.bulk_po_import.bulk_po_import.run_po_validation",
             queue="long", timeout=3600, docname=self.name,
         )
         return "Validation started. Refresh in a few seconds."
@@ -53,7 +53,7 @@ class ShipmentPOImport(Document):
         self.db_set("creation_log", "⏳ Creating Purchase Orders. Please refresh in a few seconds.")
         frappe.db.commit()
         frappe.enqueue(
-            "shipment_automation.shipment_automation.doctype.shipment_po_import.shipment_po_import.run_po_creation",
+            "shipment_automation.shipment_automation.doctype.bulk_po_import.bulk_po_import.run_po_creation",
             queue="long", timeout=3600, docname=self.name,
         )
         return "Purchase Order creation started. Refresh in a few seconds."
@@ -86,7 +86,7 @@ def get_column_map(sheet):
 
 
 def run_po_validation(docname):
-    doc = frappe.get_doc("Shipment PO Import", docname)
+    doc = frappe.get_doc("Bulk PO Import", docname)
     try:
         file_doc = frappe.get_doc("File", {"file_url": doc.po_excel})
         wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
@@ -160,7 +160,7 @@ def run_po_validation(docname):
 
 
 def run_po_creation(docname):
-    doc = frappe.get_doc("Shipment PO Import", docname)
+    doc = frappe.get_doc("Bulk PO Import", docname)
     try:
         file_doc = frappe.get_doc("File", {"file_url": doc.po_excel})
         wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
@@ -204,7 +204,6 @@ def run_po_creation(docname):
             if data["schedule_date"]:
                 po.schedule_date = getdate(data["schedule_date"])
             
-            # Explicitly set currency from supplier master before missing values
             supplier_currency = frappe.db.get_value("Supplier", po.supplier, "default_currency")
             if supplier_currency:
                 po.currency = supplier_currency
@@ -222,7 +221,6 @@ def run_po_creation(docname):
                     po_item.schedule_date = getdate(data["schedule_date"])
 
             po.flags.ignore_permissions = True
-            # Double check currency and exchange rate after items are added
             po.run_method("set_missing_values")
             po.insert()
             

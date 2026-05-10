@@ -123,7 +123,7 @@
  "modified": "2024-01-04 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Shipment Automation",
- "name": "Shipment Import",
+ "name": "Bulk Purchase Receipt Import",
  "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
