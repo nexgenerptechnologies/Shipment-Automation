@@ -200,40 +200,43 @@ def run_po_creation(docname):
                 created.append(f"⚠️ {p_num} already exists.")
                 continue
 
-            # Use frappe.get_doc instead of new_doc to ensure cleaner state
-            po = frappe.get_doc({
-                "doctype": "Purchase Order",
-                "name": p_num,
-                "supplier": data["supplier"],
-                "company": company,
-                "transaction_date": getdate(data["transaction_date"]) if data["transaction_date"] else None,
-                "schedule_date": getdate(data["schedule_date"]) if data["schedule_date"] else None,
-            })
+            # ── FIX: Force exact PO Name while using standard creation ──
+            po = frappe.new_doc("Purchase Order")
+            po.name = p_num 
+            po.supplier = data["supplier"]
+            po.company = company
+            po.transaction_date = getdate(data["transaction_date"]) if data["transaction_date"] else None
+            po.schedule_date = getdate(data["schedule_date"]) if data["schedule_date"] else None
             
-            # Fetch default values (Category, Currency, Taxes) from master
+            # 1. Fetch Currency, Category, and basic template
             po.run_method("set_missing_values")
             
+            # Ensure conversion rate is safe
             if not po.conversion_rate:
                 po.conversion_rate = 1.0
             
+            # 2. Add items and fetch their specific tax/name details
             for item in data["items"]:
                 po_item = po.append("items", {
                     "item_code": item["item_code"],
                     "qty": item["qty"],
                     "rate": item["rate"]
                 })
-                # This call is critical for Item Name, UOM, and Item-specific taxes
                 po_item.run_method("set_missing_values")
 
-            po.flags.ignore_permissions = True
-            # Re-run set_missing_values at header to calculate taxes based on added items
+            # 3. CRITICAL: Trigger tax calculation based on GST logic
+            # This triggers the Tax Template to be picked up based on the added items
             po.run_method("set_missing_values")
             po.run_method("calculate_taxes_and_totals")
+
+            po.flags.ignore_permissions = True
             
-            # Insert the document
-            po.insert()
+            # 4. Save the document - forcing the name one last time
+            po.db_insert()
+            # Run all standard hooks (GST calculation, etc.)
+            po.run_method("on_update")
             
-            # Set custom line numbers after insertion
+            # 5. Handle custom line numbers
             import re
             match = re.search(r'(\d+)$', p_num)
             base_number = match.group(1) if match else p_num
