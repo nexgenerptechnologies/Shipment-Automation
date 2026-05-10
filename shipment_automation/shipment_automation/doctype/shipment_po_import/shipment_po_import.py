@@ -191,6 +191,11 @@ def run_po_creation(docname):
         created = []
         company = frappe.db.get_single_value("Global Defaults", "default_company")
         for p_num, data in po_map.items():
+            # Check if it was already created (in case of a partial previous run)
+            if frappe.db.exists("Purchase Order", p_num):
+                created.append(f"⚠️ {p_num} already exists.")
+                continue
+
             po = frappe.new_doc("Purchase Order")
             po.name = p_num
             po.supplier = data["supplier"]
@@ -201,7 +206,6 @@ def run_po_creation(docname):
             if data["schedule_date"]:
                 po.schedule_date = getdate(data["schedule_date"])
             
-            # Fetch supplier defaults first
             po.run_method("set_missing_values")
             
             for item in data["items"]:
@@ -210,19 +214,14 @@ def run_po_creation(docname):
                     "qty": item["qty"],
                     "rate": item["rate"]
                 })
-                # Trigger item-level defaults
                 po_item.run_method("set_missing_values")
                 if data["schedule_date"]:
                     po_item.schedule_date = getdate(data["schedule_date"])
 
-            # Use standard insert to save the document properly
-            # We don't use ignore_mandatory here anymore to let it calculate conversion rates properly
             po.flags.ignore_permissions = True
             po.insert()
             
-            # Re-fetch for line number setting
-            po = frappe.get_doc("Purchase Order", p_num)
-            
+            # Use the 'po' object directly instead of get_doc to set line numbers
             import re
             match = re.search(r'(\d+)$', p_num)
             base_number = match.group(1) if match else p_num
@@ -239,7 +238,7 @@ def run_po_creation(docname):
             created.append(f"✅ {po.name}")
 
         doc.db_set("status", "Completed")
-        doc.db_set("creation_log", "CREATED:\n" + "\n".join(created))
+        doc.db_set("creation_log", "SUMMARY:\n" + "\n".join(created))
         frappe.db.commit()
 
     except Exception:
