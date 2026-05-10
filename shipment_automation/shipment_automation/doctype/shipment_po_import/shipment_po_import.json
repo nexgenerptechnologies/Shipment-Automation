@@ -6,8 +6,6 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "supplier",
-  "po_naming_series",
   "po_excel",
   "status",
   "section_break_log",
@@ -15,29 +13,12 @@
  ],
  "fields": [
   {
-   "fieldname": "supplier",
-   "fieldtype": "Link",
-   "in_list_view": 1,
-   "label": "Supplier",
-   "options": "Supplier",
-   "reqd": 0,
-   "description": "Optional. Leave blank if each Excel row has a different supplier."
-  },
-  {
-   "fieldname": "po_naming_series",
-   "fieldtype": "Select",
-   "in_list_view": 0,
-   "label": "PO Naming Series",
-   "reqd": 1,
-   "description": "Select the Purchase Order naming series before uploading the Excel file."
-  },
-  {
    "fieldname": "po_excel",
    "fieldtype": "Attach",
    "in_list_view": 1,
    "label": "PO Excel File",
    "reqd": 1,
-   "description": "Cols: A=Item Code, B=Item Name, C=Desc, D=UOM, E=Qty, F=Rate, G=Supplier, H=PO#, I=Line Number"
+   "description": "Upload the Excel file with columns: Supplier, Purchase Order Number, Item Code, Quantity, Rate, etc."
   },
   {
    "default": "Draft",

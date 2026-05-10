@@ -37,8 +37,6 @@ class ShipmentPOImport(Document):
 
     @frappe.whitelist()
     def start_validation(self):
-        if not self.po_naming_series:
-            frappe.throw("Please select a PO Naming Series before uploading.")
         self.db_set("status", "Validating")
         self.db_set("creation_log", "⏳ Validation in progress. Please refresh in a few seconds.")
         frappe.db.commit()
@@ -79,12 +77,20 @@ def get_column_map(sheet):
         "line_number": ["Line Number", "Line #"]
     }
     
+    found_headers = []
     for idx, cell_value in enumerate(header_row):
         if not cell_value: continue
         clean_val = str(cell_value).strip().lower()
+        found_any = False
         for key, aliases in expected_headers.items():
             if any(alias.lower() == clean_val for alias in aliases):
                 mapping[key] = idx
+                found_headers.append(clean_val)
+                found_any = True
+        if not found_any:
+            # We can log unknown headers if needed
+            pass
+
     return mapping
 
 
@@ -96,7 +102,7 @@ def run_po_validation(docname):
         sheet = wb.active
 
         col_map = get_column_map(sheet)
-        required_cols = ["item_code", "quantity", "rate", "po_num"]
+        required_cols = ["item_code", "quantity", "rate", "po_num", "supplier"]
         missing_cols = [c for c in required_cols if c not in col_map]
         
         if missing_cols:
@@ -117,9 +123,17 @@ def run_po_validation(docname):
             if not po_num:
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
                 continue
+            
+            # Check for existing PO to prevent duplicates
+            if frappe.db.exists("Purchase Order", po_num):
+                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists in ERPNext.")
+                continue
                 
             row_ok = True
-            if supplier and not frappe.db.exists("Supplier", supplier):
+            if not supplier:
+                errors.append(f"Row {row_idx} ❌ Supplier is missing.")
+                row_ok = False
+            elif not frappe.db.exists("Supplier", supplier):
                 errors.append(f"Row {row_idx} ❌ Supplier '{supplier}' not found.")
                 row_ok = False
 
@@ -131,7 +145,7 @@ def run_po_validation(docname):
                 errors.append(f"Row {row_idx} ❌ Item Code is empty.")
                 row_ok = False
             elif not frappe.db.exists("Item", item_code):
-                errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in ERPNext. Item creation is disabled.")
+                errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in ERPNext.")
                 row_ok = False
 
             if row_ok: ok_rows += 1
@@ -140,7 +154,7 @@ def run_po_validation(docname):
             doc.db_set("status", "Validated")
             doc.db_set("creation_log", f"✅ {ok_rows} row(s) validated successfully.")
         else:
-            doc.db_set("status", "Draft")
+            doc.db_set("status", "Failed")
             doc.db_set("creation_log", f"❌ Issues found:\n\n" + "\n".join(errors))
         frappe.db.commit()
 
@@ -163,7 +177,7 @@ def run_po_creation(docname):
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row) or not row[col_map["po_num"]]: continue
             po_num = str(row[col_map["po_num"]]).strip()
-            po_map.setdefault(po_num, {"supplier": str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else doc.supplier, "items": []})
+            po_map.setdefault(po_num, {"supplier": str(row[col_map["supplier"]]).strip(), "items": []})
             po_map[po_num]["items"].append({
                 "item_code": str(row[col_map["item_code"]]).strip(),
                 "qty": flt(row[col_map["quantity"]]),
@@ -175,7 +189,8 @@ def run_po_creation(docname):
         company = frappe.db.get_single_value("Global Defaults", "default_company")
         for p_num, data in po_map.items():
             po = frappe.new_doc("Purchase Order")
-            po.naming_series, po.supplier, po.company = doc.po_naming_series, data["supplier"], company
+            po.name = p_num  # Explicitly set the PO name from Excel
+            po.supplier, po.company = data["supplier"], company
             for item in data["items"]:
                 po.append("items", {"item_code": item["item_code"], "qty": item["qty"], "rate": item["rate"], "schedule_date": nowdate()})
             po.insert(ignore_permissions=True)
@@ -194,7 +209,7 @@ def run_po_creation(docname):
                 value = data["items"][idx-1]["line_number"] or f"{base_number}-{idx}"
                 item.db_set(line_field, value)
             
-            created.append(f"✅ {po.name} (Excel: {p_num})")
+            created.append(f"✅ {po.name}")
 
         doc.db_set("status", "Completed")
         doc.db_set("creation_log", "CREATED:\n" + "\n".join(created))
