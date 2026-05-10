@@ -144,9 +144,9 @@ def run_validation(docname):
                 
                 # Smart fallback for PO Name
                 if excel_series:
-                    po_name = f"{excel_series}{base_po_num}"
+                    po_name = f"{excel_series}{base_po_num}" if not base_po_num.startswith(excel_series) else base_po_num
                 elif doc.po_prefix:
-                    po_name = f"{doc.po_prefix}{base_po_num}"
+                    po_name = f"{doc.po_prefix}{base_po_num}" if not base_po_num.startswith(doc.po_prefix) else base_po_num
                 else:
                     po_name = base_po_num # Fallback if full name is passed directly
                     
@@ -261,9 +261,9 @@ def run_processing(docname):
                 
                 # Smart fallback for PO Name
                 if excel_series:
-                    po_name = f"{excel_series}{base_po_num}"
+                    po_name = f"{excel_series}{base_po_num}" if not base_po_num.startswith(excel_series) else base_po_num
                 elif doc.po_prefix:
-                    po_name = f"{doc.po_prefix}{base_po_num}"
+                    po_name = f"{doc.po_prefix}{base_po_num}" if not base_po_num.startswith(doc.po_prefix) else base_po_num
                 else:
                     po_name = base_po_num
             except Exception:
