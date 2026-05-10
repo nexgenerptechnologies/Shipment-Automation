@@ -200,20 +200,19 @@ def run_po_creation(docname):
                 created.append(f"⚠️ {p_num} already exists.")
                 continue
 
-            po = frappe.new_doc("Purchase Order")
-            po.name = p_num
-            po.supplier = data["supplier"]
-            po.company = company
-            
-            if data["transaction_date"]:
-                po.transaction_date = getdate(data["transaction_date"])
-            if data["schedule_date"]:
-                po.schedule_date = getdate(data["schedule_date"])
+            # Use frappe.get_doc instead of new_doc to ensure cleaner state
+            po = frappe.get_doc({
+                "doctype": "Purchase Order",
+                "name": p_num,
+                "supplier": data["supplier"],
+                "company": company,
+                "transaction_date": getdate(data["transaction_date"]) if data["transaction_date"] else None,
+                "schedule_date": getdate(data["schedule_date"]) if data["schedule_date"] else None,
+            })
             
             # Fetch default values (Category, Currency, Taxes) from master
             po.run_method("set_missing_values")
             
-            # Ensure totals are calculated after taxes are fetched
             if not po.conversion_rate:
                 po.conversion_rate = 1.0
             
@@ -223,18 +222,18 @@ def run_po_creation(docname):
                     "qty": item["qty"],
                     "rate": item["rate"]
                 })
+                # This call is critical for Item Name, UOM, and Item-specific taxes
                 po_item.run_method("set_missing_values")
 
             po.flags.ignore_permissions = True
-            # Final calculation for taxes and totals
+            # Re-run set_missing_values at header to calculate taxes based on added items
             po.run_method("set_missing_values")
             po.run_method("calculate_taxes_and_totals")
             
-            # Use 'db_insert' to force the name from excel
-            po.db_insert()
-            po.run_method("on_update")
+            # Insert the document
+            po.insert()
             
-            # Set custom line numbers
+            # Set custom line numbers after insertion
             import re
             match = re.search(r'(\d+)$', p_num)
             base_number = match.group(1) if match else p_num
