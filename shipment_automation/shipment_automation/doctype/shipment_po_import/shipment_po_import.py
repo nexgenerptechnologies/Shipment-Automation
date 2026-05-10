@@ -205,16 +205,6 @@ def run_po_creation(docname):
             
             # Trigger currency and other defaults from supplier
             # Use 'noset' for currency to force re-fetch from supplier
-            po.currency = None 
-            po.run_method("set_missing_values")
-            
-            # Double check currency from supplier master
-            supplier_currency = frappe.db.get_value("Supplier", po.supplier, "default_currency")
-            if supplier_currency:
-                po.currency = supplier_currency
-                # Re-run to ensure exchange rate and fields update to this currency
-                po.run_method("set_missing_values")
-            
             for item in data["items"]:
                 po_item = po.append("items", {
                     "item_code": item["item_code"],
@@ -224,7 +214,15 @@ def run_po_creation(docname):
                 if data["schedule_date"]:
                     po_item.schedule_date = getdate(data["schedule_date"])
 
-            po.insert(ignore_permissions=True)
+            po.flags.ignore_permissions = True
+            po.flags.ignore_links = True
+            po.__islocal = True
+            po.db_insert()
+            
+            # Re-fetch the doc to trigger standard metadata setting without changing name
+            po = frappe.get_doc("Purchase Order", p_num)
+            po.run_method("set_missing_values")
+            po.save(ignore_permissions=True)
             
             import re
             match = re.search(r'(\d+)$', p_num)
