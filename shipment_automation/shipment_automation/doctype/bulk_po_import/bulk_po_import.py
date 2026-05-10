@@ -208,7 +208,12 @@ def run_po_creation(docname):
             if supplier_currency:
                 po.currency = supplier_currency
 
+            # Trigger missing values to fetch basic currency/supplier info
             po.run_method("set_missing_values")
+            
+            # ── FIX: Ensure conversion_rate is set before adding items ──
+            if not po.conversion_rate:
+                po.conversion_rate = 1.0 # Safe default to avoid mandatory error
             
             for item in data["items"]:
                 po_item = po.append("items", {
@@ -221,6 +226,7 @@ def run_po_creation(docname):
                     po_item.schedule_date = getdate(data["schedule_date"])
 
             po.flags.ignore_permissions = True
+            # Final run to ensure everything is polished
             po.run_method("set_missing_values")
             po.insert()
             
