@@ -164,8 +164,12 @@ def run_po_validation(docname):
                             errors.append(f"Row {row_idx} ❌ New Item '{item_code}' requires Item Group and HSN/SAC.")
                             row_ok = False
                         else:
+                            if not frappe.db.exists("Item Group", item_group):
+                                errors.append(f"Row {row_idx} ❌ Item Group '{item_group}' not found in system.")
+                                row_ok = False
+                            
                             if not any(i['item_code'] == item_code for i in items_to_create):
-                                items_to_create.append({"item_code": item_code, "item_name": item_name or item_code, "description": desc, "item_group": item_group, "hsn_code": hsn_code, "uom": "Pcs"})
+                                items_to_create.append({"item_code": item_code, "item_name": item_name or item_code, "description": desc, "item_group": item_group, "hsn_code": hsn_code, "uom": "Nos"})
 
             if row_ok: ok_rows += 1
 
@@ -177,7 +181,7 @@ def run_po_validation(docname):
             doc.db_set("status", "Validated")
             doc.db_set("creation_log", "\n".join(log))
         else:
-            doc.db_set("status", "Failed")
+            doc.db_set("status", "Draft")
             doc.db_set("creation_log", f"❌ Issues found:\n\n" + "\n".join(errors))
         frappe.db.commit()
 
@@ -208,7 +212,7 @@ def run_po_creation(docname):
                     new_item.description = str(row[col_map["description"]]).strip() if col_map.get("description") is not None and row[col_map["description"]] else ""
                     new_item.item_group = str(row[col_map["item_group"]]).strip() if col_map.get("item_group") is not None and row[col_map["item_group"]] else ""
                     new_item.gst_hsn_code = str(row[col_map["hsn_sac"]]).strip() if col_map.get("hsn_sac") is not None and row[col_map["hsn_sac"]] else ""
-                    new_item.stock_uom = "Pcs"
+                    new_item.stock_uom = "Nos"
                     new_item.insert(ignore_permissions=True)
                     item_mapping[item_code] = new_item.name
 
