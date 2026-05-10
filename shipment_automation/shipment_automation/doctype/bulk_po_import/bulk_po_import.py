@@ -102,6 +102,9 @@ def run_po_validation(docname):
         errors = []
         ok_rows = 0
 
+        # Used for checking duplicate PO Number within the SAME Excel file
+        po_supplier_map = {}
+
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row): continue
 
@@ -115,8 +118,14 @@ def run_po_validation(docname):
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
                 continue
             
+            # ── Check Duplicate PO Number for DIFFERENT Suppliers in same Excel ──
+            if po_num in po_supplier_map and po_supplier_map[po_num] != supplier:
+                errors.append(f"Row {row_idx} ❌ PO '{po_num}' is used for multiple suppliers in this file ({po_supplier_map[po_num]} vs {supplier}).")
+                continue
+            po_supplier_map[po_num] = supplier
+            
             if frappe.db.exists("Purchase Order", po_num):
-                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists.")
+                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' already exists in system.")
                 continue
                 
             row_ok = True
@@ -195,7 +204,8 @@ def run_po_creation(docname):
                 continue
 
             po = frappe.new_doc("Purchase Order")
-            po.name = p_num
+            # ── CRITICAL: Manual Name Assignment for exact PO Number match ──
+            po.name = p_num 
             po.supplier = data["supplier"]
             po.company = company
             
@@ -204,16 +214,18 @@ def run_po_creation(docname):
             if data["schedule_date"]:
                 po.schedule_date = getdate(data["schedule_date"])
             
+            # Fetch default tax category and currency from supplier
+            po.run_method("set_missing_values")
+            
             supplier_currency = frappe.db.get_value("Supplier", po.supplier, "default_currency")
             if supplier_currency:
                 po.currency = supplier_currency
 
-            # Trigger missing values to fetch basic currency/supplier info
+            # Trigger missing values again to fetch tax templates based on Category
             po.run_method("set_missing_values")
             
-            # ── FIX: Ensure conversion_rate is set before adding items ──
             if not po.conversion_rate:
-                po.conversion_rate = 1.0 # Safe default to avoid mandatory error
+                po.conversion_rate = 1.0
             
             for item in data["items"]:
                 po_item = po.append("items", {
@@ -226,7 +238,7 @@ def run_po_creation(docname):
                     po_item.schedule_date = getdate(data["schedule_date"])
 
             po.flags.ignore_permissions = True
-            # Final run to ensure everything is polished
+            # Final run to fetch taxes and calculate totals
             po.run_method("set_missing_values")
             po.insert()
             
