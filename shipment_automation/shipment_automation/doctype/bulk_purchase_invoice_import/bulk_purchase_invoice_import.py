@@ -8,7 +8,7 @@ import datetime
 
 @frappe.whitelist()
 def download_template():
-    """Generates and downloads the Bulk Purchase Invoice & BOE Import Excel template with ALL requested columns."""
+    """Generates and downloads the Bulk Purchase Invoice & BOE Import Excel template."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Bulk PI and BOE Import"
@@ -67,6 +67,14 @@ def get_column_map(sheet):
     mapping = {}
     expected = {
         "pr_num": ["Purchase Receipt Number", "PR Number"],
+        "supplier": ["Supplier Name", "Supplier"],
+        "po_num": ["Purchase Order Number", "PO Number"],
+        "item_code": ["Item Code"],
+        "item_name": ["Item Name"],
+        "description": ["Description"],
+        "quantity": ["Quantity", "Qty"],
+        "rate": ["Rate"],
+        "line_number": ["Line Number", "Line #"],
         "pi_post_date": ["Purchase Invoice Posting Date"],
         "pi_num": ["Purchase Invoice Number", "PI Number", "Invoice No"],
         "pi_date": ["Purchase Invoice Date", "PI Date", "Invoice Date"],
@@ -83,32 +91,47 @@ def get_column_map(sheet):
     return mapping
 
 
+def find_po_item_by_line(po_num, item_code, line_val):
+    """STRICTLY finds a PO Item by Line Number."""
+    meta = frappe.get_meta("Purchase Order Item")
+    af = [f.fieldname for f in meta.fields]
+    if "line_number" in af:
+        res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val, "item_code": item_code}, "name")
+        if res: return res
+    if "custom_line_number" in af:
+        res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val, "item_code": item_code}, "name")
+        if res: return res
+    import re
+    match = re.search(r'(\d+)$', po_num)
+    if match:
+        suffix = match.group(1)
+        if line_val.startswith(f"{suffix}-"):
+            try:
+                idx_part = int(line_val.split("-")[-1])
+                res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "idx": idx_part, "item_code": item_code}, "name")
+                if res: return res
+            except: pass
+    return None
+
+
 def parse_excel_date(date_val):
-    """STRICTLY forces DD/MM/YYYY parsing even if Excel auto-converted it to MM/DD/YYYY."""
-    if not date_val:
-        return None
-    
+    if not date_val: return None
     if isinstance(date_val, (datetime.datetime, datetime.date)):
         if date_val.day <= 12:
-             try:
-                 return datetime.date(date_val.year, date_val.day, date_val.month).strftime("%Y-%m-%d")
-             except ValueError:
-                 return date_val.strftime("%Y-%m-%d")
+             try: return datetime.date(date_val.year, date_val.day, date_val.month).strftime("%Y-%m-%d")
+             except ValueError: return date_val.strftime("%Y-%m-%d")
         return date_val.strftime("%Y-%m-%d")
-
     if isinstance(date_val, str):
         date_str = date_val.strip()
         for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"]:
             try:
                 dt = datetime.datetime.strptime(date_str, fmt)
                 return dt.strftime("%Y-%m-%d")
-            except ValueError:
-                continue
+            except ValueError: continue
     try:
         res = getdate(date_val)
         return res.strftime("%Y-%m-%d") if res else None
-    except:
-        return None
+    except: return None
 
 
 def run_validation(docname):
@@ -129,35 +152,64 @@ def run_validation(docname):
             row_errors = []
             
             pr_id = str(row[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and row[col_map["pr_num"]] else ""
+            po_num = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None and row[col_map["po_num"]] else ""
+            supplier_name = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else ""
+            item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None else ""
+            item_name = str(row[col_map["item_name"]]).strip() if col_map.get("item_name") is not None else ""
+            description = str(row[col_map["description"]]).strip() if col_map.get("description") is not None else ""
+            qty_exc = flt(row[col_map["quantity"]]) if col_map.get("quantity") is not None else 0
+            rate_exc = flt(row[col_map["rate"]]) if col_map.get("rate") is not None else 0
+            line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
+            
             pi_id = str(row[col_map["pi_num"]]).strip() if col_map.get("pi_num") is not None and row[col_map["pi_num"]] else ""
             pi_post_date = parse_excel_date(row[col_map["pi_post_date"]]) if col_map.get("pi_post_date") is not None else None
-            pi_date = parse_excel_date(row[col_map["pi_date"]]) if col_map.get("pi_date") is not None else None
             boe_id = str(row[col_map["boe_num"]]).strip() if col_map.get("boe_num") is not None and row[col_map["boe_num"]] else ""
-            boe_post_date = parse_excel_date(row[col_map["boe_post_date"]]) if col_map.get("boe_post_date") is not None else None
-            boe_date = parse_excel_date(row[col_map["boe_date"]]) if col_map.get("boe_date") is not None else None
 
-            if not pr_id:
-                row_errors.append("Purchase Receipt Number missing.")
-            elif not frappe.db.exists("Purchase Receipt", pr_id):
-                row_errors.append(f"Purchase Receipt '{pr_id}' not found in system.")
-            else:
-                # ── GST Category Check for Overseas Suppliers ──
-                supplier = frappe.db.get_value("Purchase Receipt", pr_id, "supplier")
-                gst_category = frappe.db.get_value("Supplier", supplier, "gst_category")
-                
-                if boe_id and gst_category != "Overseas":
-                    row_errors.append(f"Bill of Entry creation failed: Supplier '{supplier}' GST Category is '{gst_category}', but Bill of Entry is only allowed for 'Overseas' category.")
+            # ── Scenario Logic & PO Validation ──
+            if pr_id:
+                # SCENARIO 1: PR-to-PI
+                if not frappe.db.exists("Purchase Receipt", pr_id):
+                    row_errors.append(f"Purchase Receipt '{pr_id}' not found.")
+                if not po_num:
+                    row_errors.append("PO Number is mandatory when PR Number is provided.")
+            elif po_num:
+                # SCENARIO 2: PO-to-PI
+                if not frappe.db.exists("Purchase Order", po_num):
+                    row_errors.append(f"Purchase Order '{po_num}' not found.")
+            # Scenario 3: Direct PI (No PR, No PO) - Allowed as fallback
 
+            # ── Strict PO Matching (if PO exists) ──
+            if po_num and frappe.db.exists("Purchase Order", po_num):
+                po_item_name = find_po_item_by_line(po_num, item_code, line_val) if line_val else frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
+                if not po_item_name:
+                    row_errors.append(f"Item/Line '{line_val or item_code}' not found in PO '{po_num}'.")
+                else:
+                    pi_item = frappe.get_doc("Purchase Order Item", po_item_name)
+                    # 7-decimal Rate Check
+                    if abs(flt(pi_item.rate) - flt(rate_exc)) > 0.0000001:
+                        row_errors.append(f"Rate mismatch: Excel {rate_exc} vs PO {pi_item.rate}")
+                    # 2-of-3 column match
+                    score = 0
+                    if pi_item.item_code == item_code: score += 1
+                    if pi_item.item_name == item_name: score += 1
+                    if pi_item.description == description: score += 1
+                    if score < 2:
+                        row_errors.append("2-of-3 column match failed (Code/Name/Description).")
+
+            # ── General Validations ──
             if not pi_id:
                 row_errors.append("Purchase Invoice Number missing.")
             elif frappe.db.exists("Purchase Invoice", pi_id):
-                row_errors.append(f"Duplicate Error: Purchase Invoice '{pi_id}' already exists.")
+                row_errors.append(f"Duplicate Error: Invoice '{pi_id}' already exists.")
 
             if pi_post_date and getdate(pi_post_date) > getdate(today):
-                row_errors.append(f"Purchase Invoice Posting Date '{pi_post_date}' is a future date.")
+                row_errors.append(f"Invoice Posting Date '{pi_post_date}' is a future date.")
 
-            if boe_id and frappe.db.exists("Bill of Entry", boe_id):
-                row_errors.append(f"Duplicate Error: Bill of Entry '{boe_id}' already exists.")
+            # Overseas BOE Check
+            if boe_id and supplier_name:
+                gst_cat = frappe.db.get_value("Supplier", supplier_name, "gst_category")
+                if gst_cat != "Overseas":
+                    row_errors.append(f"Bill of Entry creation failed: Supplier '{supplier_name}' is '{gst_cat}', BOE only allowed for 'Overseas'.")
 
             if row_errors:
                 errors.append(f"Row {row_idx} ❌ " + " | ".join(row_errors))
@@ -166,10 +218,10 @@ def run_validation(docname):
 
         if not errors:
             doc.db_set("status", "Validated")
-            doc.db_set("validation_log", f"✅ {ok_rows} row(s) validated successfully.")
+            doc.db_set("validation_log", f"✅ {ok_rows} row(s) validated.")
         else:
             doc.db_set("status", "Failed")
-            doc.db_set("validation_log", f"❌ Issues found:\n\n" + "\n".join(errors))
+            doc.db_set("validation_log", "❌ Issues found:\n\n" + "\n".join(errors))
         frappe.db.commit()
     except Exception:
         doc.db_set("status", "Failed")
@@ -185,66 +237,94 @@ def run_processing(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
         
-        created = []
+        pi_groups = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
-            
-            pr_id = str(row[col_map["pr_num"]]).strip()
             pi_id = str(row[col_map["pi_num"]]).strip()
-            pi_post_date = parse_excel_date(row[col_map["pi_post_date"]])
-            pi_date = parse_excel_date(row[col_map["pi_date"]])
-            boe_id = str(row[col_map["boe_num"]]).strip() if col_map.get("boe_num") is not None and row[col_map["boe_num"]] else ""
-            boe_post_date = parse_excel_date(row[col_map["boe_post_date"]])
-            boe_date = parse_excel_date(row[col_map["boe_date"]])
+            if pi_id not in pi_groups: pi_groups[pi_id] = []
+            pi_groups[pi_id].append(row)
 
+        created = []
+        for pi_id, rows in pi_groups.items():
             try:
-                pr_doc = frappe.get_doc("Purchase Receipt", pr_id)
-                gst_category = frappe.db.get_value("Supplier", pr_doc.supplier, "gst_category")
-                
-                # 1. Create Purchase Invoice
-                from erpnext.buying.doctype.purchase_receipt.purchase_receipt import make_purchase_invoice
-                pi = make_purchase_invoice(pr_id)
+                first = rows[0]
+                pr_id = str(first[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and first[col_map["pr_num"]] else ""
+                po_num = str(first[col_map["po_num"]]).strip() if col_map.get("po_num") is not None and first[col_map["po_num"]] else ""
+                supplier = str(first[col_map["supplier"]]).strip()
+                pi_post_date = parse_excel_date(first[col_map["pi_post_date"]])
+                pi_date = parse_excel_date(first[col_map["pi_date"]])
+                boe_id = str(first[col_map["boe_num"]]).strip() if col_map.get("boe_num") is not None and first[col_map["boe_num"]] else ""
+                boe_post_date = parse_excel_date(first[col_map["boe_post_date"]])
+                boe_date = parse_excel_date(first[col_map["boe_date"]])
+
+                if frappe.db.exists("Purchase Invoice", pi_id): continue
+
+                # ── Create Purchase Invoice ──
+                if pr_id:
+                    # Scenario 1: PR-to-PI
+                    from erpnext.buying.doctype.purchase_receipt.purchase_receipt import make_purchase_invoice
+                    pi = make_purchase_invoice(pr_id)
+                elif po_num:
+                    # Scenario 2: PO-to-PI
+                    from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_invoice
+                    pi = make_purchase_invoice(po_num)
+                    pi.update_stock = 1
+                else:
+                    # Scenario 3: Standalone
+                    pi = frappe.new_doc("Purchase Invoice")
+                    pi.update_stock = 1
+
+                # Common Headers
                 pi.name = pi_id
+                pi.supplier = supplier
                 pi.posting_date = pi_post_date or pi_date or nowdate()
                 pi.bill_no = pi_id
                 pi.bill_date = pi_date or pi_post_date or nowdate()
                 
-                # Set Naming Series
+                # Naming Series
                 pi_series = frappe.get_meta("Purchase Invoice").get_field("naming_series").options.split("\n")
                 pi.naming_series = pi_series[0]
                 for s in pi_series:
-                    prefix = s.replace(".####", "").replace(".YY.", "").replace(".YYYY.", "").strip()
-                    if prefix and pi_id.startswith(prefix):
+                    pfx = s.replace(".####", "").replace(".YY.", "").replace(".YYYY.", "").strip()
+                    if pfx and pi_id.startswith(pfx):
                         pi.naming_series = s
                         break
 
+                # Update Items (Handle partials or Standalone lines)
+                if not pr_id and not po_num: # Only for Standalone
+                    pi.items = []
+                    for r in rows:
+                        pi.append("items", {
+                            "item_code": str(r[col_map["item_code"]]).strip(),
+                            "qty": flt(r[col_map["quantity"]]),
+                            "rate": flt(r[col_map["rate"]])
+                        })
+                
                 pi.flags.ignore_permissions = True
                 pi.db_insert()
-                for item in pi.get("items"): item.db_insert()
-                for tax in pi.get("taxes"): tax.db_insert()
+                for i in pi.get("items"): i.db_insert()
+                for t in pi.get("taxes"): t.db_insert()
                 pi.run_method("on_update")
                 pi.submit()
 
-                invoice_msg = f"PI {pi.name}"
-
-                # 2. Create Bill of Entry (ONLY for Overseas)
-                if boe_id and gst_category == "Overseas":
+                # ── Create BOE (Overseas only) ──
+                if boe_id and frappe.db.get_value("Supplier", supplier, "gst_category") == "Overseas":
                     boe = frappe.new_doc("Bill of Entry")
                     boe.name = boe_id
                     boe.purchase_invoice = pi.name
                     boe.posting_date = boe_post_date or boe_date or nowdate()
                     boe.bill_of_entry_number = boe_id
                     boe.bill_of_entry_date = boe_date or boe_post_date or nowdate()
-                    boe.company = pr_doc.company
-                    boe.supplier = pr_doc.supplier
+                    boe.company = pi.company
+                    boe.supplier = pi.supplier
                     boe.flags.ignore_permissions = True
                     boe.insert(ignore_mandatory=True)
-                    created.append(f"✅ {pr_id} -> {invoice_msg}, BOE {boe.name}")
+                    created.append(f"✅ {pi_id} (BOE {boe_id})")
                 else:
-                    created.append(f"✅ {pr_id} -> {invoice_msg} (BOE skipped - Not Overseas)")
+                    created.append(f"✅ {pi_id}")
 
             except Exception as e:
-                created.append(f"❌ {pr_id}: {str(e)}")
+                created.append(f"❌ {pi_id}: {str(e)}")
 
         doc.db_set("status", "Completed")
         doc.db_set("processing_log", "SUMMARY:\n" + "\n".join(created))
