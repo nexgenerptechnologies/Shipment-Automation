@@ -159,10 +159,14 @@ def run_validation(docname):
         errors = []
         ok_rows = 0
         
+        # ── Grouping for Total Quantity check ──
+        # Group by: (PO Number, Item Code, Line Number)
+        po_line_totals = {}
+        
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row): continue
             
-            row_errors = [] # Collect all errors for this row in one go
+            row_errors = []
             
             pr_num = str(row[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and row[col_map["pr_num"]] else ""
             raw_pr_date = row[col_map["pr_date"]] if col_map.get("pr_date") is not None else None
@@ -209,9 +213,14 @@ def run_validation(docname):
                 if po_item_name:
                     pi = frappe.get_doc("Purchase Order Item", po_item_name)
                     
-                    # ── MODIFIED QUANTITY LOGIC: ALLOW PARTIAL ──
-                    if flt(qty_exc) > flt(pi.qty) + 0.0000001:
-                        row_errors.append(f"Qty over-receipt: Excel {qty_exc} exceeds PO {pi.qty}")
+                    # Accumulate totals for over-receipt check across multiple rows
+                    total_key = (po_num, item_code, line_val)
+                    if total_key not in po_line_totals:
+                        po_line_totals[total_key] = 0
+                    po_line_totals[total_key] += qty_exc
+                    
+                    if po_line_totals[total_key] > flt(pi.qty) + 0.0000001:
+                        row_errors.append(f"Total Qty ({po_line_totals[total_key]}) exceeds PO Line Qty ({pi.qty}) for Line {line_val}")
                     
                     # Rate MUST match exactly
                     if abs(flt(pi.rate) - flt(rate_exc)) > 0.0000001:
