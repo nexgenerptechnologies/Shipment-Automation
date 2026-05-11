@@ -1,0 +1,28 @@
+{
+ "charts": [],
+ "content": "[{\"type\":\"header\",\"data\":{\"text\":\"Purchasing Bulk Imports\",\"level\":2}},{\"type\":\"shortcut\",\"data\":{\"shortcuts\":[{\"label\":\"Bulk PO Import\",\"type\":\"DocType\",\"link_to\":\"Bulk PO Import\"},{\"label\":\"Bulk Purchase Receipt Import\",\"type\":\"DocType\",\"link_to\":\"Bulk Purchase Receipt Import\"},{\"label\":\"Bulk Purchase Invoice Import\",\"type\":\"DocType\",\"link_to\":\"Bulk Purchase Invoice Import\"}]}},{\"type\":\"header\",\"data\":{\"text\":\"Sales Bulk Imports\",\"level\":2}},{\"type\":\"shortcut\",\"data\":{\"shortcuts\":[{\"label\":\"Bulk Sales Order Import\",\"type\":\"DocType\",\"link_to\":\"Bulk Sales Order Import\"}]}},{\"type\":\"header\",\"data\":{\"text\":\"Master Data Imports\",\"level\":2}},{\"type\":\"shortcut\",\"data\":{\"shortcuts\":[{\"label\":\"Bulk Supplier Import\",\"type\":\"DocType\",\"link_to\":\"Bulk Supplier Import\"},{\"label\":\"Bulk Customer Import\",\"type\":\"DocType\",\"link_to\":\"Bulk Customer Import\"}]}}]",
+ "creation": "2024-05-12 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "icon": "upload",
+ "idx": 0,
+ "is_default": 1,
+ "is_standard": 1,
+ "label": "Shipment Automation",
+ "modified": "2024-05-12 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Shipment Automation",
+ "name": "Shipment Automation",
+ "number_of_columns": 1,
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "roles": [
+  {
+   "role": "System Manager"
+  }
+ ],
+ "sequence_id": 1,
+ "shortcuts": [],
+ "title": "Shipment Automation"
+}
