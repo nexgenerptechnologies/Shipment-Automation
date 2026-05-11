@@ -159,9 +159,10 @@ def run_validation(docname):
         errors = []
         ok_rows = 0
         
-        # ── Grouping for Multi-Line Total Quantity check ──
+        # ── Grouping for Multi-Line Sums & Conflict Checks ──
         po_line_totals = {}
         po_line_rows = {}
+        pr_number_map = {} # Track PR # -> (Supplier, PO Number, Row)
         
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row): continue
@@ -181,8 +182,17 @@ def run_validation(docname):
 
             if not pr_num:
                 row_errors.append("Purchase Receipt Number missing.")
-            elif frappe.db.exists("Purchase Receipt", pr_num):
-                row_errors.append(f"Duplicate PR Number '{pr_num}' already exists.")
+            else:
+                # ── Conflict Check: Same PR # for different PO or Supplier ──
+                if pr_num not in pr_number_map:
+                    pr_number_map[pr_num] = {"supplier": supplier_name, "po": po_num, "row": row_idx}
+                else:
+                    existing = pr_number_map[pr_num]
+                    if existing["supplier"] != supplier_name or existing["po"] != po_num:
+                        row_errors.append(f"Purchase Receipt Number '{pr_num}' is same for Purchase Order Number '{existing['po']}' & '{po_num}' and the suppliers '{existing['supplier']}' & '{supplier_name}' are different so Purchase Receipt can't created.")
+
+                if frappe.db.exists("Purchase Receipt", pr_num):
+                    row_errors.append(f"Duplicate PR Number '{pr_num}' already exists.")
 
             if not po_num or not frappe.db.exists("Purchase Order", po_num):
                 row_errors.append(f"PO '{po_num}' not found.")
@@ -197,29 +207,19 @@ def run_validation(docname):
                 if po_supplier != supplier_name:
                     row_errors.append(f"Supplier mismatch: PO is for '{po_supplier}', Excel has '{supplier_name}'.")
 
-                po_item_name = None
-                if line_val:
-                    po_item_name = find_po_item_by_line(po_num, item_code, line_val)
-                    if not po_item_name:
-                        row_errors.append(f"Line Number '{line_val}' for Item '{item_code}' not found in PO '{po_num}'.")
+                po_item_name = find_po_item_by_line(po_num, item_code, line_val) if line_val else frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
+                
+                if not po_item_name:
+                    row_errors.append(f"Item/Line '{line_val or item_code}' not found in PO '{po_num}'.")
                 else:
-                    po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
-                    if not po_item_name:
-                        row_errors.append(f"Item '{item_code}' not found in PO '{po_num}'.")
-
-                if po_item_name:
                     pi = frappe.get_doc("Purchase Order Item", po_item_name)
-                    
-                    # Accumulate totals for consolidation check
                     total_key = (po_num, item_code, line_val)
                     if total_key not in po_line_totals:
                         po_line_totals[total_key] = 0.0
                         po_line_rows[total_key] = []
-                    
                     po_line_totals[total_key] += qty_exc
                     po_line_rows[total_key].append(str(row_idx))
                     
-                    # ── STICKY FIX: ALWAYS validate total sum against PO Line ──
                     if po_line_totals[total_key] > flt(pi.qty) + 0.0000001:
                         rows_str = " & ".join(po_line_rows[total_key])
                         row_errors.append(f"total sum {po_line_totals[total_key]} of row number {rows_str} are more than Purchase Order Line Quantity {line_val}")
@@ -280,41 +280,40 @@ def run_processing(docname):
             po_header = frappe.db.get_value("Purchase Order", po_num_first, ["company", "currency", "conversion_rate"], as_dict=True)
             if frappe.db.exists("Purchase Receipt", pr_id): continue
 
+            # ── Bypass naming series logic using direct DB insert ──
             pr = frappe.new_doc("Purchase Receipt")
             pr.name = pr_id
             
+            # Find best series match or use default
             available_series = frappe.get_meta("Purchase Receipt").get_field("naming_series").options.split("\n")
-            pr.naming_series = available_series[0]
+            matched_series = available_series[0]
             for series in available_series:
                 prefix = series.replace(".####", "").replace(".YY.", "").replace(".YYYY.", "").strip()
-                if pr_id.startswith(prefix):
-                    pr.naming_series = series
+                if prefix and pr_id.startswith(prefix):
+                    matched_series = series
                     break
-
-            pr.supplier = supplier
-            pr.company = po_header.company or frappe.db.get_single_value("Global Defaults", "default_company")
-            pr.currency = po_header.currency
-            pr.conversion_rate = po_header.conversion_rate or 1.0
             
-            pr.set_posting_time = 1
-            pr.posting_date = getdate(pr_date_raw) if pr_date_raw else nowdate()
-            pr.posting_time = "00:00:00"
+            # Use direct dict updates to bypass read-only/mandatory flags during object setup
+            pr.update({
+                "naming_series": matched_series,
+                "supplier": supplier,
+                "company": po_header.company or frappe.db.get_single_value("Global Defaults", "default_company"),
+                "currency": po_header.currency,
+                "conversion_rate": po_header.conversion_rate or 1.0,
+                "set_posting_time": 1,
+                "posting_date": getdate(pr_date_raw) if pr_date_raw else nowdate(),
+                "posting_time": "00:00:00"
+            })
 
             for row in rows:
                 p_num = str(row[col_map["po_num"]]).strip()
                 i_code = str(row[col_map["item_code"]]).strip()
                 l_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
                 
-                po_item_n = None
-                if l_val:
-                    po_item_n = find_po_item_by_line(p_num, i_code, l_val)
-                else:
-                    po_item_n = frappe.db.get_value("Purchase Order Item", {"parent": p_num, "item_code": i_code}, "name")
-                
+                po_item_n = find_po_item_by_line(p_num, i_code, l_val) if l_val else frappe.db.get_value("Purchase Order Item", {"parent": p_num, "item_code": i_code}, "name")
                 if not po_item_n: continue
                 
                 po_item = frappe.get_doc("Purchase Order Item", po_item_n)
-                
                 pr_item = pr.append("items", {
                     "item_code": i_code,
                     "qty": flt(row[col_map["quantity"]]),
@@ -324,15 +323,14 @@ def run_processing(docname):
                     "warehouse": po_item.warehouse
                 })
                 pr_item.run_method("set_missing_values")
-                
-                l_field = "line_number"
-                if not hasattr(pr_item, "line_number") and hasattr(pr_item, "custom_line_number"):
-                    l_field = "custom_line_number"
+                l_field = "line_number" if hasattr(pr.items[0], "line_number") else "custom_line_number"
                 if l_val: setattr(pr_item, l_field, l_val)
 
             pr.run_method("set_missing_values")
             pr.run_method("calculate_taxes_and_totals")
             pr.flags.ignore_permissions = True
+            
+            # Force insert
             pr.db_insert()
             for child in pr.get_all_children(): child.db_insert()
             pr.run_method("on_update")
