@@ -209,6 +209,8 @@ def run_validation(docname):
 
                 if po_item_name:
                     pi = frappe.get_doc("Purchase Order Item", po_item_name)
+                    
+                    # Accumulate totals for consolidation check
                     total_key = (po_num, item_code, line_val)
                     if total_key not in po_line_totals:
                         po_line_totals[total_key] = 0.0
@@ -217,6 +219,7 @@ def run_validation(docname):
                     po_line_totals[total_key] += qty_exc
                     po_line_rows[total_key].append(str(row_idx))
                     
+                    # ── STICKY FIX: ALWAYS validate total sum against PO Line ──
                     if po_line_totals[total_key] > flt(pi.qty) + 0.0000001:
                         rows_str = " & ".join(po_line_rows[total_key])
                         row_errors.append(f"total sum {po_line_totals[total_key]} of row number {rows_str} are more than Purchase Order Line Quantity {line_val}")
@@ -302,15 +305,13 @@ def run_processing(docname):
                 i_code = str(row[col_map["item_code"]]).strip()
                 l_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
                 
-                # ── FIX: Safety check for po_item_n before get_doc ──
                 po_item_n = None
                 if l_val:
                     po_item_n = find_po_item_by_line(p_num, i_code, l_val)
                 else:
                     po_item_n = frappe.db.get_value("Purchase Order Item", {"parent": p_num, "item_code": i_code}, "name")
                 
-                if not po_item_n:
-                    continue # Should have been caught in validation, skip to avoid crash
+                if not po_item_n: continue
                 
                 po_item = frappe.get_doc("Purchase Order Item", po_item_n)
                 
@@ -332,7 +333,6 @@ def run_processing(docname):
             pr.run_method("set_missing_values")
             pr.run_method("calculate_taxes_and_totals")
             pr.flags.ignore_permissions = True
-            
             pr.db_insert()
             for child in pr.get_all_children(): child.db_insert()
             pr.run_method("on_update")

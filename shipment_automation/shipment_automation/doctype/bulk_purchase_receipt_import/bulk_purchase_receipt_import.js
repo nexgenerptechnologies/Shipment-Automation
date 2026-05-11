@@ -12,15 +12,15 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
         const statusMsg = {
             'Validating': ['⏳ Validation in progress... Please refresh in a few seconds.', 'yellow'],
             'Processing': ['⏳ Creating Purchase Receipts... Please refresh in a few seconds.', 'yellow'],
-            'Completed':  ['✅ Purchase Receipts created as Draft. Review and Submit them.', 'green'],
+            'Completed':  ['✅ Purchase Receipts created. Review them in the processing results.', 'green'],
             'Failed':     ['❌ An error occurred. See the logs below for details.', 'red'],
         };
         if (statusMsg[frm.doc.status]) {
             frm.dashboard.add_comment(statusMsg[frm.doc.status][0], statusMsg[frm.doc.status][1], true);
         }
 
-        // ── Validate Data button ─────────────────────────────────
-        if (frm.doc.excel_file && (frm.doc.status === 'Draft' || frm.doc.status === 'Failed')) {
+        // ── Validate Data button (NOW ALWAYS VISIBLE IF FILE EXISTS) ──
+        if (frm.doc.excel_file) {
             frm.add_custom_button(__('Validate Data'), function () {
                 frappe.confirm(
                     'Start validation of the uploaded Excel file?',
@@ -38,8 +38,7 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
         if (frm.doc.status === 'Validated') {
             frm.add_custom_button(__('Process Shipment'), function () {
                 frappe.confirm(
-                    'This will create separate <b>Purchase Receipts (Draft)</b> for each supplier in the Excel.<br><br>'
-                    + 'Series used: <b>PR-.YY.-</b>',
+                    'This will create separate <b>Purchase Receipts (Draft)</b> based on the Excel file.',
                     function () {
                         frm.call('start_creation').then(r => {
                             frappe.show_alert({ message: r.message, indicator: 'green' });
@@ -54,7 +53,7 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
         if (frm.doc.status === 'Completed') {
             frm.add_custom_button(__('Create Invoices & Bills of Entry'), function () {
                 frappe.confirm(
-                    'Create Purchase Invoices (PINV-.YY.-) and Bills of Entry for all submitted receipts?',
+                    'Create Purchase Invoices and Bills of Entry for all created receipts?',
                     function () {
                         frappe.show_alert({ message: 'Processing Documents...', indicator: 'blue' });
                         frm.call('create_purchase_invoice_and_boe').then(r => {
@@ -66,4 +65,12 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
             }).addClass('btn-primary');
         }
     },
+
+    // ── Re-show Validate button when file is changed ──
+    excel_file: function(frm) {
+        if (frm.doc.excel_file) {
+            frm.set_value('status', 'Draft');
+            frm.save().then(() => frm.refresh());
+        }
+    }
 });
