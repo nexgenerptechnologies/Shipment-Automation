@@ -8,15 +8,17 @@ import datetime
 
 @frappe.whitelist()
 def download_template():
-    """Generates and downloads the Bulk Purchase Invoice & BOE Import Excel template."""
+    """Generates and downloads the Bulk Purchase Invoice & BOE Import Excel template with ALL requested columns."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Bulk PI and BOE Import"
     
     headers = [
-        "Purchase Receipt Number",
-        "Purchase Invoice Number", "Purchase Invoice Date",
-        "Bill of Entry Number", "Bill of Entry Date"
+        "Purchase Receipt Number", "Purchase Receipt Date", "Supplier Name", 
+        "Purchase Order Number", "Item Code", "Item Name", 
+        "Description", "Quantity", "Rate", "Line Number",
+        "Purchase Invoice Posting Date", "Purchase Invoice Number", "Purchase Invoice Date",
+        "Bill of Entry Posting Date", "Bill of Entry Number", "Bill of Entry Date"
     ]
     ws.append(headers)
     
@@ -65,8 +67,10 @@ def get_column_map(sheet):
     mapping = {}
     expected = {
         "pr_num": ["Purchase Receipt Number", "PR Number"],
+        "pi_post_date": ["Purchase Invoice Posting Date"],
         "pi_num": ["Purchase Invoice Number", "PI Number", "Invoice No"],
         "pi_date": ["Purchase Invoice Date", "PI Date", "Invoice Date"],
+        "boe_post_date": ["Bill of Entry Posting Date"],
         "boe_num": ["Bill of Entry Number", "BOE Number", "BOE No"],
         "boe_date": ["Bill of Entry Date", "BOE Date"]
     }
@@ -126,26 +130,33 @@ def run_validation(docname):
             
             pr_id = str(row[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and row[col_map["pr_num"]] else ""
             pi_id = str(row[col_map["pi_num"]]).strip() if col_map.get("pi_num") is not None and row[col_map["pi_num"]] else ""
+            pi_post_date = parse_excel_date(row[col_map["pi_post_date"]]) if col_map.get("pi_post_date") is not None else None
             pi_date = parse_excel_date(row[col_map["pi_date"]]) if col_map.get("pi_date") is not None else None
             boe_id = str(row[col_map["boe_num"]]).strip() if col_map.get("boe_num") is not None and row[col_map["boe_num"]] else ""
+            boe_post_date = parse_excel_date(row[col_map["boe_post_date"]]) if col_map.get("boe_post_date") is not None else None
             boe_date = parse_excel_date(row[col_map["boe_date"]]) if col_map.get("boe_date") is not None else None
 
             if not pr_id:
                 row_errors.append("Purchase Receipt Number missing.")
             elif not frappe.db.exists("Purchase Receipt", pr_id):
                 row_errors.append(f"Purchase Receipt '{pr_id}' not found in system.")
+            else:
+                # ── GST Category Check for Overseas Suppliers ──
+                supplier = frappe.db.get_value("Purchase Receipt", pr_id, "supplier")
+                gst_category = frappe.db.get_value("Supplier", supplier, "gst_category")
+                
+                if boe_id and gst_category != "Overseas":
+                    row_errors.append(f"Bill of Entry creation failed: Supplier '{supplier}' GST Category is '{gst_category}', but Bill of Entry is only allowed for 'Overseas' category.")
 
             if not pi_id:
                 row_errors.append("Purchase Invoice Number missing.")
             elif frappe.db.exists("Purchase Invoice", pi_id):
                 row_errors.append(f"Duplicate Error: Purchase Invoice '{pi_id}' already exists.")
 
-            if pi_date and getdate(pi_date) > getdate(today):
-                row_errors.append(f"Purchase Invoice Date '{pi_date}' is a future date.")
+            if pi_post_date and getdate(pi_post_date) > getdate(today):
+                row_errors.append(f"Purchase Invoice Posting Date '{pi_post_date}' is a future date.")
 
-            if not boe_id:
-                row_errors.append("Bill of Entry Number missing.")
-            elif frappe.db.exists("Bill of Entry", boe_id):
+            if boe_id and frappe.db.exists("Bill of Entry", boe_id):
                 row_errors.append(f"Duplicate Error: Bill of Entry '{boe_id}' already exists.")
 
             if row_errors:
@@ -180,19 +191,23 @@ def run_processing(docname):
             
             pr_id = str(row[col_map["pr_num"]]).strip()
             pi_id = str(row[col_map["pi_num"]]).strip()
+            pi_post_date = parse_excel_date(row[col_map["pi_post_date"]])
             pi_date = parse_excel_date(row[col_map["pi_date"]])
-            boe_id = str(row[col_map["boe_num"]]).strip()
+            boe_id = str(row[col_map["boe_num"]]).strip() if col_map.get("boe_num") is not None and row[col_map["boe_num"]] else ""
+            boe_post_date = parse_excel_date(row[col_map["boe_post_date"]])
             boe_date = parse_excel_date(row[col_map["boe_date"]])
 
             try:
                 pr_doc = frappe.get_doc("Purchase Receipt", pr_id)
+                gst_category = frappe.db.get_value("Supplier", pr_doc.supplier, "gst_category")
                 
                 # 1. Create Purchase Invoice
                 from erpnext.buying.doctype.purchase_receipt.purchase_receipt import make_purchase_invoice
                 pi = make_purchase_invoice(pr_id)
                 pi.name = pi_id
-                pi.posting_date = pi_date or nowdate()
+                pi.posting_date = pi_post_date or pi_date or nowdate()
                 pi.bill_no = pi_id
+                pi.bill_date = pi_date or pi_post_date or nowdate()
                 
                 # Set Naming Series
                 pi_series = frappe.get_meta("Purchase Invoice").get_field("naming_series").options.split("\n")
@@ -210,19 +225,24 @@ def run_processing(docname):
                 pi.run_method("on_update")
                 pi.submit()
 
-                # 2. Create Bill of Entry
-                boe = frappe.new_doc("Bill of Entry")
-                boe.name = boe_id
-                boe.purchase_invoice = pi.name
-                boe.posting_date = boe_date or nowdate()
-                boe.bill_of_entry_number = boe_id
-                boe.bill_of_entry_date = boe_date or nowdate()
-                boe.company = pr_doc.company
-                boe.supplier = pr_doc.supplier
-                boe.flags.ignore_permissions = True
-                boe.insert(ignore_mandatory=True)
-                
-                created.append(f"✅ {pr_id} -> PI {pi.name}, BOE {boe.name}")
+                invoice_msg = f"PI {pi.name}"
+
+                # 2. Create Bill of Entry (ONLY for Overseas)
+                if boe_id and gst_category == "Overseas":
+                    boe = frappe.new_doc("Bill of Entry")
+                    boe.name = boe_id
+                    boe.purchase_invoice = pi.name
+                    boe.posting_date = boe_post_date or boe_date or nowdate()
+                    boe.bill_of_entry_number = boe_id
+                    boe.bill_of_entry_date = boe_date or boe_post_date or nowdate()
+                    boe.company = pr_doc.company
+                    boe.supplier = pr_doc.supplier
+                    boe.flags.ignore_permissions = True
+                    boe.insert(ignore_mandatory=True)
+                    created.append(f"✅ {pr_id} -> {invoice_msg}, BOE {boe.name}")
+                else:
+                    created.append(f"✅ {pr_id} -> {invoice_msg} (BOE skipped - Not Overseas)")
+
             except Exception as e:
                 created.append(f"❌ {pr_id}: {str(e)}")
 
