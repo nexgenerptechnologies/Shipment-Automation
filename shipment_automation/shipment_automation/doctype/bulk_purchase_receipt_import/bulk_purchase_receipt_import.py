@@ -63,7 +63,6 @@ class BulkPurchaseReceiptImport(Document):
             frappe.throw("No Purchase Receipts found in the log.")
         
         import re
-        # Find all PR names in the log (matches PR- followed by any characters until a space or end of line)
         receipts = re.findall(r'(PR-[^\s\n✅❌]+)', self.receipts_log)
         
         if not receipts:
@@ -78,7 +77,6 @@ class BulkPurchaseReceiptImport(Document):
                 
                 from erpnext.stock.stock_ledger import make_purchase_invoice
                 pi = make_purchase_invoice(pr_name)
-                # Auto-set default Invoice Naming Series
                 pi.naming_series = "PINV-.YY.-"
                 pi.insert(ignore_permissions=True)
                 
@@ -119,6 +117,36 @@ def get_column_map(sheet):
     return mapping
 
 
+def find_po_item_name(po_num, item_code, line_val=None):
+    """Safely finds a PO Item name, checking multiple field possibilities."""
+    filters = {"parent": po_num, "item_code": item_code}
+    
+    if line_val:
+        # 1. Try 'line_number'
+        res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val}, "name")
+        if res: return res
+        
+        # 2. Try 'custom_line_number'
+        res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
+        if res: return res
+        
+        # 3. Fallback: Check if PO Number suffix matches part of line_val
+        import re
+        match = re.search(r'(\d+)$', po_num)
+        if match:
+            suffix = match.group(1)
+            # If line_val is something like '4278-1', maybe search for idx=1?
+            if line_val.startswith(f"{suffix}-"):
+                try:
+                    idx_part = int(line_val.split("-")[-1])
+                    res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "idx": idx_part}, "name")
+                    if res: return res
+                except: pass
+
+    # If no line_val or not found by line_val, just find by item_code
+    return frappe.db.get_value("Purchase Order Item", filters, "name")
+
+
 def run_validation(docname):
     doc = frappe.get_doc("Bulk Purchase Receipt Import", docname)
     try:
@@ -155,40 +183,32 @@ def run_validation(docname):
                 errors.append(f"Row {row_idx} ❌ PO '{po_num}' belongs to '{po_supplier}', not '{supplier_name}'.")
                 continue
 
-            filters = {"parent": po_num, "item_code": item_code}
-            if line_val:
-                po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val}, "name") or \
-                               frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
-                if not po_item_name:
-                    errors.append(f"Row {row_idx} ❌ Line Number '{line_val}' not found in PO '{po_num}'.")
-                    continue
-                filters["name"] = po_item_name
+            # Find matching PO Line using safe helper
+            target_item_name = find_po_item_name(po_num, item_code, line_val)
             
-            po_items = frappe.get_all("Purchase Order Item", filters=filters, fields=["name", "item_name", "description", "qty", "rate"])
-            
-            if not po_items:
-                errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in PO '{po_num}'.")
+            if not target_item_name:
+                err_msg = f"Row {row_idx} ❌ Item '{item_code}'"
+                if line_val: err_msg += f" with Line '{line_val}'"
+                err_msg += f" not found in PO '{po_num}'."
+                errors.append(err_msg)
                 continue
             
-            match_found = False
-            for pi in po_items:
-                score = 0
-                if pi.item_name == item_name: score += 1
-                if pi.description == description: score += 1
-                
-                if score >= 1:
-                    if abs(pi.qty - qty_exc) > 0.01:
-                        errors.append(f"Row {row_idx} ❌ Quantity mismatch: Excel {qty_exc} vs PO {pi.qty}")
-                    elif abs(pi.rate - rate_exc) > 0.01:
-                        errors.append(f"Row {row_idx} ❌ Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
-                    else:
-                        match_found = True
-                        break
+            pi = frappe.get_doc("Purchase Order Item", target_item_name)
             
-            if not match_found:
-                errors.append(f"Row {row_idx} ❌ Data mismatch (Name/Desc/Qty/Rate) with PO.")
+            # Match 2 out of (Item Name, Description)
+            score = 0
+            if pi.item_name == item_name: score += 1
+            if pi.description == description: score += 1
+            
+            if score >= 1:
+                if abs(pi.qty - qty_exc) > 0.01:
+                    errors.append(f"Row {row_idx} ❌ Quantity mismatch: Excel {qty_exc} vs PO {pi.qty}")
+                elif abs(pi.rate - rate_exc) > 0.01:
+                    errors.append(f"Row {row_idx} ❌ Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
+                else:
+                    ok_rows += 1
             else:
-                ok_rows += 1
+                errors.append(f"Row {row_idx} ❌ Data mismatch (Name/Description) with PO.")
 
         if not errors:
             doc.db_set("status", "Validated")
@@ -222,7 +242,6 @@ def run_processing(docname):
         created_receipts = []
         for s_name, rows in supplier_map.items():
             pr = frappe.new_doc("Purchase Receipt")
-            # Auto-set default Receipt Naming Series
             pr.naming_series = "PR-.YY.-"
             pr.supplier = s_name
             pr.company = frappe.db.get_value("Supplier", s_name, "default_company") or frappe.db.get_single_value("Global Defaults", "default_company")
@@ -233,13 +252,8 @@ def run_processing(docname):
                 item_code = str(row[col_map["item_code"]]).strip()
                 line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
                 
-                filters = {"parent": po_num, "item_code": item_code}
-                if line_val:
-                    po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val}, "name") or \
-                                   frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
-                    filters["name"] = po_item_name
-                
-                po_item = frappe.get_doc("Purchase Order Item", filters)
+                target_item_name = find_po_item_name(po_num, item_code, line_val)
+                po_item = frappe.get_doc("Purchase Order Item", target_item_name)
                 
                 pr_item = pr.append("items", {
                     "item_code": item_code,
