@@ -149,28 +149,38 @@ def find_po_item_by_line(po_num, item_code, line_val):
 
 
 def parse_excel_date(date_val):
-    """STRICTLY parses dates in DD/MM/YYYY format from Excel."""
+    """STRICTLY forces DD/MM/YYYY parsing even if Excel auto-converted it to MM/DD/YYYY."""
     if not date_val:
         return None
     
-    # If it's already a datetime object from openpyxl
+    # ── CASE 1: Date Object (Excel auto-converted it) ──
+    # If Excel already converted 10/05 to October 5th, we need to SWAP it back
     if isinstance(date_val, (datetime.datetime, datetime.date)):
+        # If day <= 12, there is a high risk that month/day were swapped by Excel
+        if date_val.day <= 12:
+             # Swapping back: old day becomes month, old month becomes day
+             try:
+                 return datetime.date(date_val.year, date_val.day, date_val.month).strftime("%Y-%m-%d")
+             except ValueError:
+                 # If swap is invalid (e.g. 31/02), keep original
+                 return date_val.strftime("%Y-%m-%d")
         return date_val.strftime("%Y-%m-%d")
 
-    # If it's a string, force DD/MM/YYYY
+    # ── CASE 2: String/Text ──
     if isinstance(date_val, str):
         date_str = date_val.strip()
-        # Try DD/MM/YYYY first
-        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"]:
+        # Strictly force DD/MM/YYYY parsing
+        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"]:
             try:
                 dt = datetime.datetime.strptime(date_str, fmt)
                 return dt.strftime("%Y-%m-%d")
             except ValueError:
                 continue
     
-    # Fallback to Frappe's getdate if it matches something else
+    # Fallback
     try:
-        return getdate(date_val)
+        res = getdate(date_val)
+        return res.strftime("%Y-%m-%d") if res else None
     except:
         return None
 
@@ -185,7 +195,6 @@ def run_validation(docname):
         
         errors = []
         ok_rows = 0
-        
         po_line_totals = {}
         po_line_rows = {}
         pr_number_map = {}
@@ -206,7 +215,6 @@ def run_validation(docname):
             rate_exc = flt(row[col_map["rate"]]) if col_map.get("rate") is not None else 0
             line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
 
-            # ── Force DD/MM/YYYY Parsing ──
             pr_date_parsed = parse_excel_date(raw_pr_date)
 
             if not pr_num:
@@ -228,7 +236,7 @@ def run_validation(docname):
                 if pr_date_parsed:
                     po_date_obj = getdate(frappe.db.get_value("Purchase Order", po_num, "transaction_date"))
                     if getdate(pr_date_parsed) < po_date_obj:
-                        row_errors.append(f"PR Date ({pr_date_parsed}) cannot be before PO Date ({po_date_obj}).")
+                        row_errors.append(f"PR Date ({pr_date_parsed}) cannot be before PO Date ({po_date_obj.strftime('%Y-%m-%d')}).")
 
                 po_supplier = frappe.db.get_value("Purchase Order", po_num, "supplier")
                 if po_supplier != supplier_name:
