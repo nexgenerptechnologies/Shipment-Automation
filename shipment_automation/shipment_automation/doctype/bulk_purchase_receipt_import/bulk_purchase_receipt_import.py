@@ -45,11 +45,9 @@ class BulkPurchaseReceiptImport(Document):
         return "Validation started. Refresh in a few seconds."
 
     @frappe.whitelist()
-    def start_processing(self):
+    def start_creation(self):
         if self.status != "Validated":
             frappe.throw("Please validate the data first.")
-        if not self.pr_naming_series:
-            frappe.throw("Please select a Purchase Receipt Naming Series.")
         self.db_set("status", "Processing")
         self.db_set("receipts_log", "⏳ Creating Purchase Receipts. Please refresh in a few seconds.")
         frappe.db.commit()
@@ -61,16 +59,12 @@ class BulkPurchaseReceiptImport(Document):
 
     @frappe.whitelist()
     def create_purchase_invoice_and_boe(self):
-        # This will need to be updated to handle multiple receipts if we split them
         if not self.receipts_log:
             frappe.throw("No Purchase Receipts found in the log.")
         
-        # Extract receipt names from the log
         import re
-        receipts = re.findall(r'PR-[0-9]{5}', self.receipts_log) # Simple pattern match
-        if not receipts:
-            # Try matching based on generic PR name pattern if PR series is different
-            receipts = re.findall(r'([A-Z0-9\-/]+\-[0-9]+)', self.receipts_log)
+        # Find all PR names in the log (matches PR- followed by any characters until a space or end of line)
+        receipts = re.findall(r'(PR-[^\s\n✅❌]+)', self.receipts_log)
         
         if not receipts:
              frappe.throw("Could not find Purchase Receipt names in the processing log.")
@@ -80,11 +74,12 @@ class BulkPurchaseReceiptImport(Document):
             try:
                 pr_doc = frappe.get_doc("Purchase Receipt", pr_name)
                 if pr_doc.docstatus != 1:
-                    continue # Only process submitted receipts
+                    continue
                 
                 from erpnext.stock.stock_ledger import make_purchase_invoice
                 pi = make_purchase_invoice(pr_name)
-                pi.naming_series = self.pi_naming_series
+                # Auto-set default Invoice Naming Series
+                pi.naming_series = "PINV-.YY.-"
                 pi.insert(ignore_permissions=True)
                 
                 boe = frappe.new_doc("Bill of Entry")
@@ -155,13 +150,11 @@ def run_validation(docname):
                 errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' not found.")
                 continue
 
-            # Check if PO matches Supplier
             po_supplier = frappe.db.get_value("Purchase Order", po_num, "supplier")
             if po_supplier != supplier_name:
                 errors.append(f"Row {row_idx} ❌ PO '{po_num}' belongs to '{po_supplier}', not '{supplier_name}'.")
                 continue
 
-            # Find matching PO Line
             filters = {"parent": po_num, "item_code": item_code}
             if line_val:
                 po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val}, "name") or \
@@ -218,7 +211,6 @@ def run_processing(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
         
-        # Group by Supplier (since one PR can only have one Supplier)
         supplier_map = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
@@ -230,7 +222,8 @@ def run_processing(docname):
         created_receipts = []
         for s_name, rows in supplier_map.items():
             pr = frappe.new_doc("Purchase Receipt")
-            pr.naming_series = doc.pr_naming_series
+            # Auto-set default Receipt Naming Series
+            pr.naming_series = "PR-.YY.-"
             pr.supplier = s_name
             pr.company = frappe.db.get_value("Supplier", s_name, "default_company") or frappe.db.get_single_value("Global Defaults", "default_company")
             pr.posting_date = nowdate()

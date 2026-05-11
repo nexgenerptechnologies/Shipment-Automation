@@ -6,9 +6,6 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "pr_naming_series",
-  "pi_naming_series",
-  "po_prefix",
   "excel_file",
   "status",
   "section_break_linked",
@@ -21,26 +18,6 @@
   "receipts_log"
  ],
  "fields": [
-  {
-   "fieldname": "pr_naming_series",
-   "fieldtype": "Select",
-   "label": "Purchase Receipt Naming Series",
-   "reqd": 1,
-   "description": "Select the Purchase Receipt series BEFORE uploading the Shipment Excel."
-  },
-  {
-   "fieldname": "pi_naming_series",
-   "fieldtype": "Select",
-   "label": "Purchase Invoice Naming Series",
-   "reqd": 1,
-   "description": "Select the Purchase Invoice series BEFORE clicking Create Invoice & Bill of Entry."
-  },
-  {
-   "fieldname": "po_prefix",
-   "fieldtype": "Select",
-   "label": "PO Naming Series (Fallback)",
-   "description": "Optional: Fallback Naming Series if Column F is empty in the Excel file."
-  },
   {
    "fieldname": "excel_file",
    "fieldtype": "Attach",

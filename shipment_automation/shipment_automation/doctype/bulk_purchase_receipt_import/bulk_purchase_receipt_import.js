@@ -1,53 +1,4 @@
-const UTILS = "shipment_automation.shipment_automation.utils.get_naming_series";
-
 frappe.ui.form.on('Bulk Purchase Receipt Import', {
-
-    onload: function (frm) {
-        // Populate PR naming series dynamically
-        frappe.call({
-            method: UTILS,
-            args: { doctype: "Purchase Receipt" },
-            callback: function (r) {
-                if (r.message && r.message.length) {
-                    frm.set_df_property("pr_naming_series", "options",
-                        [""].concat(r.message).join("\n"));
-                    
-                    // Auto-select PR-.YY.- if available
-                    let default_pr = r.message.find(s => s.startsWith("PR-"));
-                    if (default_pr && !frm.doc.pr_naming_series) {
-                        frm.set_value("pr_naming_series", default_pr);
-                    }
-                    frm.refresh_field("pr_naming_series");
-                }
-            }
-        });
-
-        // Populate PI naming series dynamically
-        frappe.call({
-            method: UTILS,
-            args: { doctype: "Purchase Invoice" },
-            callback: function (r) {
-                if (r.message && r.message.length) {
-                    frm.set_df_property("pi_naming_series", "options",
-                        [""].concat(r.message).join("\n"));
-                    frm.refresh_field("pi_naming_series");
-                }
-            }
-        });
-
-        // Populate PO Naming Series (Fallback) dynamically
-        frappe.call({
-            method: UTILS,
-            args: { doctype: "Purchase Order" },
-            callback: function (r) {
-                if (r.message && r.message.length) {
-                    frm.set_df_property("po_prefix", "options",
-                        [""].concat(r.message).join("\n"));
-                    frm.refresh_field("po_prefix");
-                }
-            }
-        });
-    },
 
     refresh: function (frm) {
         // ── Download Template button ─────────────────────────────
@@ -69,10 +20,10 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
         }
 
         // ── Validate Data button ─────────────────────────────────
-        if (frm.doc.excel_file && frm.doc.status === 'Draft' && frm.doc.pr_naming_series) {
+        if (frm.doc.excel_file && (frm.doc.status === 'Draft' || frm.doc.status === 'Failed')) {
             frm.add_custom_button(__('Validate Data'), function () {
                 frappe.confirm(
-                    'Start validation of the uploaded Excel file for multiple suppliers?',
+                    'Start validation of the uploaded Excel file?',
                     function () {
                         frm.call('start_validation').then(r => {
                             frappe.show_alert({ message: r.message, indicator: 'blue' });
@@ -88,9 +39,9 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
             frm.add_custom_button(__('Process Shipment'), function () {
                 frappe.confirm(
                     'This will create separate <b>Purchase Receipts (Draft)</b> for each supplier in the Excel.<br><br>'
-                    + 'You will need to review and submit them manually.',
+                    + 'Series used: <b>PR-.YY.-</b>',
                     function () {
-                        frm.call('start_processing').then(r => {
+                        frm.call('start_creation').then(r => {
                             frappe.show_alert({ message: r.message, indicator: 'green' });
                             setTimeout(() => frm.reload_doc(), 2000);
                         });
@@ -102,17 +53,8 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
         // ── Create Invoices & BOE button ─────────────────
         if (frm.doc.status === 'Completed') {
             frm.add_custom_button(__('Create Invoices & Bills of Entry'), function () {
-                if (!frm.doc.pi_naming_series) {
-                    frappe.msgprint({
-                        title: __('Missing Naming Series'),
-                        indicator: 'orange',
-                        message: `Please select a <b>Purchase Invoice Naming Series</b> first.`
-                    });
-                    return;
-                }
-
                 frappe.confirm(
-                    'Create Purchase Invoices and Bills of Entry for all submitted receipts in the log?',
+                    'Create Purchase Invoices (PINV-.YY.-) and Bills of Entry for all submitted receipts?',
                     function () {
                         frappe.show_alert({ message: 'Processing Documents...', indicator: 'blue' });
                         frm.call('create_purchase_invoice_and_boe').then(r => {
@@ -122,18 +64,6 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
                     }
                 );
             }).addClass('btn-primary');
-        }
-
-        if (frm.doc.status === 'Failed' && frm.doc.excel_file) {
-            frm.add_custom_button(__('Re-validate'), function () {
-                frm.set_value('status', 'Draft');
-                frm.save().then(() => {
-                    frm.call('start_validation').then(r => {
-                        frappe.show_alert({ message: r.message, indicator: 'blue' });
-                        setTimeout(() => frm.reload_doc(), 2000);
-                    });
-                });
-            });
         }
     },
 });
