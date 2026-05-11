@@ -3,6 +3,7 @@ from frappe.model.document import Document
 from frappe.utils import flt, nowdate, getdate
 import openpyxl
 from io import BytesIO
+import datetime
 
 
 @frappe.whitelist()
@@ -12,9 +13,11 @@ def download_template():
     ws = wb.active
     ws.title = "Bulk PR Import Template"
     
+    # Updated headers as requested
     headers = [
-        "Supplier Name", "Purchase Order Number", "Item Code", 
-        "Item Name", "Description", "Quantity", "Rate", "Line Number"
+        "Purchase Receipt Number", "Purchase Receipt Date", "Supplier Name", 
+        "Purchase Order Number", "Item Code", "Item Name", 
+        "Description", "Quantity", "Rate", "Line Number"
     ]
     ws.append(headers)
     
@@ -63,7 +66,7 @@ class BulkPurchaseReceiptImport(Document):
             frappe.throw("No Purchase Receipts found in the log.")
         
         import re
-        receipts = re.findall(r'(PR-[^\s\n✅❌]+)', self.receipts_log)
+        receipts = re.findall(r'([A-Z0-9\-/]+\-[0-9]+)', self.receipts_log)
         
         if not receipts:
              frappe.throw("Could not find Purchase Receipt names in the processing log.")
@@ -99,6 +102,8 @@ def get_column_map(sheet):
     header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
     mapping = {}
     expected = {
+        "pr_num": ["Purchase Receipt Number", "PR Number"],
+        "pr_date": ["Purchase Receipt Date", "PR Date"],
         "supplier": ["Supplier Name", "Supplier"],
         "po_num": ["Purchase Order Number", "PO Number"],
         "item_code": ["Item Code"],
@@ -159,6 +164,7 @@ def run_validation(docname):
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row): continue
             
+            pr_num = str(row[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and row[col_map["pr_num"]] else ""
             supplier_name = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else ""
             po_num = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None else ""
             item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None else ""
@@ -168,12 +174,24 @@ def run_validation(docname):
             rate_exc = flt(row[col_map["rate"]]) if col_map.get("rate") is not None else 0
             line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
 
-            if not supplier_name or not frappe.db.exists("Supplier", supplier_name):
-                errors.append(f"Row {row_idx} ❌ Supplier '{supplier_name}' not found.")
+            if not pr_num:
+                errors.append(f"Row {row_idx} ❌ Purchase Receipt Number is missing.")
+                continue
+
+            if frappe.db.exists("Purchase Receipt", pr_num):
+                errors.append(f"Row {row_idx} ❌ Purchase Receipt '{pr_num}' already exists.")
                 continue
 
             if not po_num or not frappe.db.exists("Purchase Order", po_num):
                 errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' not found.")
+                continue
+
+            # Check if ANY Purchase Receipt (even Draft) already exists for this PO
+            # Note: Checking if items from this PO are already partially or fully received
+            # But the user specifically asked: "if the Purchase Receipt already created against Purchase Order"
+            existing_pr = frappe.db.get_value("Purchase Receipt Item", {"purchase_order": po_num, "docstatus": ["<", 2]}, "parent")
+            if existing_pr:
+                errors.append(f"Row {row_idx} ❌ A Purchase Receipt '{existing_pr}' already exists for PO '{po_num}'. Duplicate not allowed.")
                 continue
 
             po_supplier = frappe.db.get_value("Purchase Order", po_num, "supplier")
@@ -182,12 +200,8 @@ def run_validation(docname):
                 continue
 
             target_item_name = find_po_item_name(po_num, item_code, line_val)
-            
             if not target_item_name:
-                err_msg = f"Row {row_idx} ❌ Item '{item_code}'"
-                if line_val: err_msg += f" with Line '{line_val}'"
-                err_msg += f" not found in PO '{po_num}'."
-                errors.append(err_msg)
+                errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in PO '{po_num}'.")
                 continue
             
             pi = frappe.get_doc("Purchase Order Item", target_item_name)
@@ -227,49 +241,79 @@ def run_processing(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
         
-        supplier_map = {}
+        # Group by PR Number
+        pr_map = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
-            s_name = str(row[col_map["supplier"]]).strip()
-            if s_name not in supplier_map:
-                supplier_map[s_name] = []
-            supplier_map[s_name].append(row)
+            pr_id = str(row[col_map["pr_num"]]).strip()
+            if pr_id not in pr_map:
+                pr_map[pr_id] = []
+            pr_map[pr_id].append(row)
 
         created_receipts = []
-        for s_name, rows in supplier_map.items():
-            # Get data from the first PO for header info
-            first_po_num = str(rows[0][col_map["po_num"]]).strip()
-            po_header = frappe.db.get_value("Purchase Order", first_po_num, ["company", "currency", "conversion_rate"], as_dict=True)
+        for pr_id, rows in pr_map.items():
+            first_row = rows[0]
+            s_name = str(first_row[col_map["supplier"]]).strip()
+            po_num_first = str(first_row[col_map["po_num"]]).strip()
+            pr_date_raw = first_row[col_map["pr_date"]]
+            
+            po_header = frappe.db.get_value("Purchase Order", po_num_first, ["company", "currency", "conversion_rate"], as_dict=True)
             
             pr = frappe.new_doc("Purchase Receipt")
-            pr.naming_series = "PR-.YY.-"
+            pr.name = pr_id # FORCE PR NUMBER FROM EXCEL
+            
+            # Series Matching logic
+            available_series = frappe.get_meta("Purchase Receipt").get_field("naming_series").options.split("\n")
+            for series in available_series:
+                prefix = series.replace(".####", "").replace(".YY.", "").replace(".YYYY.", "").strip()
+                if pr_id.startswith(prefix):
+                    pr.naming_series = series
+                    break
+
             pr.supplier = s_name
             pr.company = po_header.company or frappe.db.get_single_value("Global Defaults", "default_company")
-            pr.currency = po_header.currency # ENSURE CURRENCY MATCHES PO
+            pr.currency = po_header.currency
             pr.conversion_rate = po_header.conversion_rate or 1.0
-            pr.posting_date = nowdate()
+            pr.posting_date = getdate(pr_date_raw) if pr_date_raw else nowdate()
 
             for row in rows:
-                po_num = str(row[col_map["po_num"]]).strip()
-                item_code = str(row[col_map["item_code"]]).strip()
-                line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
+                p_num = str(row[col_map["po_num"]]).strip()
+                i_code = str(row[col_map["item_code"]]).strip()
+                l_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
                 
-                target_item_name = find_po_item_name(po_num, item_code, line_val)
+                target_item_name = find_po_item_name(p_num, i_code, l_val)
                 po_item = frappe.get_doc("Purchase Order Item", target_item_name)
                 
                 pr_item = pr.append("items", {
-                    "item_code": item_code,
+                    "item_code": i_code,
                     "qty": flt(row[col_map["quantity"]]),
                     "rate": flt(row[col_map["rate"]]),
-                    "purchase_order": po_num,
+                    "purchase_order": p_num,
                     "purchase_order_item": po_item.name,
                     "warehouse": po_item.warehouse
                 })
                 pr_item.run_method("set_missing_values")
+                
+                # Logic for line_number or custom_line_number
+                l_field = "line_number"
+                if not hasattr(pr_item, "line_number"):
+                    if hasattr(pr_item, "custom_line_number"):
+                        l_field = "custom_line_number"
+                
+                # If Excel has a line value, put it in. If empty, ignore it.
+                if l_val:
+                    setattr(pr_item, l_field, l_val)
 
             pr.run_method("set_missing_values")
             pr.run_method("calculate_taxes_and_totals")
-            pr.insert(ignore_permissions=True)
+            pr.flags.ignore_permissions = True
+            
+            # Deep Insert to bypass naming series
+            pr.db_insert()
+            for child in pr.get_all_children():
+                child.db_insert()
+            pr.run_method("on_update")
+            
             created_receipts.append(pr.name)
 
         doc.db_set("status", "Completed")
