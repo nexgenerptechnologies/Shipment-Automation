@@ -237,14 +237,16 @@ def run_processing(docname):
 
         created_receipts = []
         for s_name, rows in supplier_map.items():
-            # Get the first PO of this supplier to inherit company
-            first_po_in_list = str(rows[0][col_map["po_num"]]).strip()
-            comp = frappe.db.get_value("Purchase Order", first_po_in_list, "company")
+            # Get data from the first PO for header info
+            first_po_num = str(rows[0][col_map["po_num"]]).strip()
+            po_header = frappe.db.get_value("Purchase Order", first_po_num, ["company", "currency", "conversion_rate"], as_dict=True)
             
             pr = frappe.new_doc("Purchase Receipt")
             pr.naming_series = "PR-.YY.-"
             pr.supplier = s_name
-            pr.company = comp or frappe.db.get_single_value("Global Defaults", "default_company")
+            pr.company = po_header.company or frappe.db.get_single_value("Global Defaults", "default_company")
+            pr.currency = po_header.currency # ENSURE CURRENCY MATCHES PO
+            pr.conversion_rate = po_header.conversion_rate or 1.0
             pr.posting_date = nowdate()
 
             for row in rows:
