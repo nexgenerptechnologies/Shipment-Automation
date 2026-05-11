@@ -3,6 +3,7 @@ from frappe.model.document import Document
 from frappe.utils import flt, getdate
 import openpyxl
 from io import BytesIO
+import re
 
 
 @frappe.whitelist()
@@ -111,11 +112,26 @@ def run_po_validation(docname):
             rate      = flt(row[col_map["rate"]]) if col_map.get("rate") is not None else 0
             supplier  = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None and row[col_map["supplier"]] else ""
             po_num    = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None and row[col_map["po_num"]] else ""
+            line_val  = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
 
             if not po_num:
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
                 continue
             
+            # ── NEW: Validation for Line Number ──
+            if line_val:
+                # Get last digits of PO Number
+                match = re.search(r'(\d+)$', po_num)
+                po_suffix = match.group(1) if match else po_num
+                
+                # Check if line_val starts with that suffix
+                if not line_val.startswith(f"{po_suffix}-"):
+                    errors.append(
+                        f"Row {row_idx} ❌ Invalid Line Number '{line_val}'. "
+                        f"Must start with '{po_suffix}-' (from PO {po_num})"
+                    )
+                    continue
+
             if po_num in po_supplier_map and po_supplier_map[po_num] != supplier:
                 errors.append(f"Row {row_idx} ❌ PO '{po_num}' is used for multiple suppliers.")
                 continue
@@ -200,7 +216,6 @@ def run_po_creation(docname):
                 created.append(f"⚠️ {p_num} already exists.")
                 continue
 
-            # Create a clean dictionary for construction
             po_dict = {
                 "doctype": "Purchase Order",
                 "name": p_num,
@@ -212,11 +227,8 @@ def run_po_creation(docname):
             }
             
             po = frappe.get_doc(po_dict)
-            
-            # 1. Fetch Currency, Category, and basic template
             po.run_method("set_missing_values")
             
-            # Ensure Currency is set to Supplier's Billing Currency
             supplier_currency = frappe.db.get_value("Supplier", po.supplier, "default_currency")
             if supplier_currency:
                 po.currency = supplier_currency
@@ -225,7 +237,6 @@ def run_po_creation(docname):
             if not po.conversion_rate:
                 po.conversion_rate = 1.0
             
-            # 2. Add items
             for item_data in data["items"]:
                 po_item = po.append("items", {
                     "item_code": item_data["item_code"],
@@ -234,25 +245,19 @@ def run_po_creation(docname):
                 })
                 po_item.run_method("set_missing_values")
 
-            # 3. Final calculation
             po.run_method("set_missing_values")
             po.run_method("calculate_taxes_and_totals")
-
             po.flags.ignore_permissions = True
             
-            # ── THE FIX: Use po.db_insert() to force the NAME while retaining nested data ──
-            # This is the same logic as Data Import: it skips naming series entirely.
             po.db_insert()
             for child in po.get_all_children():
                 child.db_insert()
                 
-            # Run final on_update hooks
             po.run_method("on_update")
             
-            # 5. Handle custom line numbers
-            import re
+            # ── SET FINAL LINE NUMBERS ──
             match = re.search(r'(\d+)$', p_num)
-            base_number = match.group(1) if match else p_num
+            base_suffix = match.group(1) if match else p_num
             
             line_field = "line_number"
             if po.items and not hasattr(po.items[0], "line_number"):
@@ -260,7 +265,8 @@ def run_po_creation(docname):
                     line_field = "custom_line_number"
 
             for idx, item in enumerate(po.items, start=1):
-                value = data["items"][idx-1]["line_number"] or f"{base_number}-{idx}"
+                # If Excel has a value, we've already validated it starts with the correct suffix
+                value = data["items"][idx-1]["line_number"] or f"{base_suffix}-{idx}"
                 item.db_set(line_field, value)
             
             created.append(f"✅ {po.name}")
