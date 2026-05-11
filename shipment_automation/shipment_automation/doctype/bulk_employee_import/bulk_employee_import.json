@@ -1,0 +1,103 @@
+{
+ "actions": [],
+ "autoname": "SA-BEMP-.YYYY.-.#####",
+ "creation": "2024-05-12 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "excel_file",
+  "image_zip",
+  "status",
+  "section_break_validation",
+  "validation_log",
+  "section_break_results",
+  "emp_log"
+ ],
+ "fields": [
+  {
+   "fieldname": "excel_file",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "Employee Excel File",
+   "reqd": 1,
+   "description": "Upload Excel with Employee ID, Name, Gender, DOB, Date of Joining, etc."
+  },
+  {
+   "fieldname": "image_zip",
+   "fieldtype": "Attach",
+   "label": "Employee Images (Zip File)",
+   "description": "Optional. Upload a .zip file where images are named as 'EmployeeID.jpg'."
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Draft\nValidating\nValidated\nProcessing\nCompleted\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_validation",
+   "fieldtype": "Section Break",
+   "label": "Validation Results"
+  },
+  {
+   "fieldname": "validation_log",
+   "fieldtype": "Long Text",
+   "label": "Validation Log",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_results",
+   "fieldtype": "Section Break",
+   "label": "Processing Results"
+  },
+  {
+   "fieldname": "emp_log",
+   "fieldtype": "Long Text",
+   "label": "Employee Log",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2024-05-12 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Shipment Automation",
+ "name": "Bulk Employee Import",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -52,3 +52,40 @@ def check_rate_precision(val1, val2, precision=7):
     """
     diff = abs(flt(val1) - flt(val2))
     return diff <= (10 ** -precision)
+
+def cleanup_old_import_logs():
+    """
+    Daily scheduled job to delete import logs older than 60 days.
+    Also deletes the associated physical files to save disk space.
+    """
+    days = 60
+    doctypes = [
+        "Bulk PO Import", "Bulk Purchase Receipt Import", "Bulk Purchase Invoice Import",
+        "Bulk Supplier Import", "Bulk Customer Import", "Bulk Sales Order Import",
+        "Bulk Delivery Note Import", "Bulk Sales Invoice Import", "Bulk Journal Entry Import",
+        "Bulk Stock Entry Import", "Bulk Employee Import"
+    ]
+    
+    for dt in doctypes:
+        if not frappe.db.exists("DocType", dt): continue
+        
+        # Find records older than 60 days
+        old_records = frappe.get_all(dt, filters={
+            "creation": ["<", frappe.utils.add_days(nowdate(), -days)]
+        })
+        
+        for record in old_records:
+            doc = frappe.get_doc(dt, record.name)
+            
+            # Delete attached files first
+            attachments = frappe.get_all("File", filters={
+                "attached_to_doctype": dt,
+                "attached_to_name": record.name
+            })
+            for f in attachments:
+                frappe.delete_doc("File", f.name, ignore_permissions=True)
+            
+            # Delete the record itself
+            frappe.delete_doc(dt, record.name, ignore_permissions=True)
+            
+    frappe.db.commit()

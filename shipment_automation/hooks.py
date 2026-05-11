@@ -15,3 +15,9 @@ app_license = "mit"
 # include js, css files in header of web.html
 # web_include_css = "/assets/shipment_automation/css/shipment_automation.css"
 # web_include_js = "/assets/shipment_automation/js/shipment_automation.js"
+
+scheduler_events = {
+    "daily": [
+        "shipment_automation.shipment_automation.utils.cleanup_old_import_logs"
+    ]
+}
