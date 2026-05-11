@@ -94,7 +94,6 @@ def validate_excel_date(date_val, row_idx, label):
         
     # If already a datetime object from Excel
     if isinstance(date_val, (datetime.datetime, datetime.date)):
-        # Check for year sanity (e.g. 205 instead of 2025)
         if date_val.year < 2000 or date_val.year > 2100:
             return None, f"Row {row_idx} ❌ Invalid Year in {label}: {date_val.year}. Must be between 2000-2100."
         return getdate(date_val), None
@@ -102,7 +101,6 @@ def validate_excel_date(date_val, row_idx, label):
     # If string, try to parse
     date_str = str(date_val).strip()
     try:
-        # Try ERPNext getdate
         parsed = getdate(date_str)
         if parsed.year < 2000 or parsed.year > 2100:
             return None, f"Row {row_idx} ❌ Invalid Year in {label}: {parsed.year}."
@@ -143,11 +141,15 @@ def run_po_validation(docname):
             raw_date = row[col_map["transaction_date"]] if col_map.get("transaction_date") is not None else None
             raw_req  = row[col_map["schedule_date"]] if col_map.get("schedule_date") is not None else None
             
-            _, date_err = validate_excel_date(raw_date, row_idx, "Date")
+            p_date, date_err = validate_excel_date(raw_date, row_idx, "Date")
             if date_err: errors.append(date_err)
             
-            _, req_err = validate_excel_date(raw_req, row_idx, "Required By")
+            s_date, req_err = validate_excel_date(raw_req, row_idx, "Required By")
             if req_err: errors.append(req_err)
+            
+            # ── NEW: Validation for PO Date vs Required Date ──
+            if p_date and s_date and p_date > s_date:
+                errors.append(f"Row {row_idx} ❌ PO Date ({p_date}) cannot be later than Required By Date ({s_date}).")
 
             if not po_num:
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
@@ -251,8 +253,19 @@ def run_po_creation(docname):
                 "company": company,
                 "transaction_date": getdate(data["transaction_date"]) if data["transaction_date"] else None,
                 "schedule_date": getdate(data["schedule_date"]) if data["schedule_date"] else None,
+                "status": "Draft",
                 "items": []
             }
+            
+            # ── NEW: Mandatory Series Matching ──
+            # This logic finds which existing Naming Series corresponds to the PO Number in Excel
+            available_series = frappe.get_meta("Purchase Order").get_field("naming_series").options.split("\n")
+            for series in available_series:
+                # Clean prefix from series (handles .####, .YYYY. etc)
+                prefix = series.replace(".####", "").replace(".YYYY.", str(datetime.datetime.now().year)).replace(".MM.", "").strip()
+                if p_num.startswith(prefix):
+                    po_dict["naming_series"] = series
+                    break
             
             po = frappe.get_doc(po_dict)
             po.run_method("set_missing_values")
@@ -272,6 +285,9 @@ def run_po_creation(docname):
                     "rate": item_data["rate"]
                 })
                 po_item.run_method("set_missing_values")
+                # Ensure Required By date is also set at item level
+                if data["schedule_date"]:
+                    po_item.schedule_date = getdate(data["schedule_date"])
 
             po.run_method("set_missing_values")
             po.run_method("calculate_taxes_and_totals")
