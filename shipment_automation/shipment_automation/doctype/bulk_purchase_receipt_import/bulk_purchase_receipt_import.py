@@ -68,7 +68,7 @@ class BulkPurchaseReceiptImport(Document):
         receipts = re.findall(r'([A-Z0-9\-/]+\-[0-9]+)', self.receipts_log)
         
         if not receipts:
-             frappe.throw("Could find Purchase Receipt names in log.")
+             frappe.throw("Could not find Purchase Receipt names in log.")
 
         created = []
         for pr_name in receipts:
@@ -126,17 +126,14 @@ def find_po_item_by_line(po_num, item_code, line_val):
     meta = frappe.get_meta("Purchase Order Item")
     available_fields = [f.fieldname for f in meta.fields]
     
-    # 1. Check for 'line_number' column
     if "line_number" in available_fields:
         res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val, "item_code": item_code}, "name")
         if res: return res
         
-    # 2. Check for 'custom_line_number' column
     if "custom_line_number" in available_fields:
         res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val, "item_code": item_code}, "name")
         if res: return res
         
-    # 3. Fallback to idx if suffix matches
     import re
     match = re.search(r'(\d+)$', po_num)
     if match:
@@ -181,26 +178,20 @@ def run_validation(docname):
                 continue
 
             if frappe.db.exists("Purchase Receipt", pr_num):
-                errors.append(f"Row {row_idx} ❌ Duplicate: PR '{pr_num}' already exists.")
+                errors.append(f"Row {row_idx} ❌ Duplicate PR Number '{pr_num}' already exists.")
                 continue
 
             if not po_num or not frappe.db.exists("Purchase Order", po_num):
                 errors.append(f"Row {row_idx} ❌ PO '{po_num}' not found.")
                 continue
 
-            # PR Date vs PO Date check
+            # Date check
             if raw_pr_date:
                 pr_date_obj = getdate(raw_pr_date)
                 po_date_obj = getdate(frappe.db.get_value("Purchase Order", po_num, "transaction_date"))
                 if pr_date_obj < po_date_obj:
-                    errors.append(f"Row {row_idx} ❌ Date Error: PR Date ({pr_date_obj}) cannot be before PO Date ({po_date_obj}).")
+                    errors.append(f"Row {row_idx} ❌ PR Date ({pr_date_obj}) cannot be before PO Date ({po_date_obj}).")
                     continue
-
-            # Strict Single PR check for PO
-            existing_pr = frappe.db.get_value("Purchase Receipt Item", {"purchase_order": po_num, "docstatus": ["<", 2]}, "parent")
-            if existing_pr:
-                errors.append(f"Row {row_idx} ❌ A Purchase Receipt '{existing_pr}' already exists for PO '{po_num}'. Duplicate blocked.")
-                continue
 
             # Supplier check
             po_supplier = frappe.db.get_value("Purchase Order", po_num, "supplier")
@@ -208,32 +199,30 @@ def run_validation(docname):
                 errors.append(f"Row {row_idx} ❌ Supplier mismatch: PO is for '{po_supplier}', Excel has '{supplier_name}'.")
                 continue
 
-            # ── STRICT MATCHING CORE ──
-            # Mandatory: Find the exact PO Item using Line Number + Item Code
+            # Mandatory Line match
             po_item_name = None
             if line_val:
                 po_item_name = find_po_item_by_line(po_num, item_code, line_val)
                 if not po_item_name:
-                    errors.append(f"Row {row_idx} ❌ Line mismatch: Line Number '{line_val}' for Item '{item_code}' not found in PO '{po_num}'.")
+                    errors.append(f"Row {row_idx} ❌ Line Number '{line_val}' for Item '{item_code}' not found in PO '{po_num}'.")
                     continue
             else:
-                # If no line in Excel, find by code (but only if it's the only one of its kind)
                 po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
                 if not po_item_name:
-                    errors.append(f"Row {row_idx} ❌ Item mismatch: Item '{item_code}' not found in PO '{po_num}'.")
+                    errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in PO '{po_num}'.")
                     continue
 
             pi = frappe.get_doc("Purchase Order Item", po_item_name)
             
-            # Mandatory: Quantity and Rate MUST match exactly
-            if abs(pi.qty - qty_exc) > 0.001:
+            # MANDATORY: Quantity and Rate MUST match exactly (up to 7 decimals as requested)
+            if abs(flt(pi.qty) - flt(qty_exc)) > 0.0000001:
                 errors.append(f"Row {row_idx} ❌ Qty mismatch: Excel {qty_exc} vs PO {pi.qty}")
                 continue
-            if abs(pi.rate - rate_exc) > 0.001:
+            if abs(flt(pi.rate) - flt(rate_exc)) > 0.0000001:
                 errors.append(f"Row {row_idx} ❌ Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
                 continue
 
-            # Mandatory Logic Block: (2 out of 3 match for Code, Name, Description)
+            # CORE LOGIC: (Supplier, PO, Qty, Rate, Suffix match) AND (2 of 3 Code, Name, Desc match)
             score = 0
             if pi.item_code == item_code: score += 1
             if pi.item_name == item_name: score += 1
@@ -241,9 +230,9 @@ def run_validation(docname):
             
             if score < 2:
                 reasons = []
-                if pi.item_code != item_code: reasons.append(f"Item Code ({item_code} vs {pi.item_code})")
-                if pi.item_name != item_name: reasons.append(f"Item Name mismatch")
-                if pi.description != description: reasons.append(f"Description mismatch")
+                if pi.item_code != item_code: reasons.append(f"Code: {item_code} vs {pi.item_code}")
+                if pi.item_name != item_name: reasons.append(f"Name: {item_name} vs {pi.item_name}")
+                if pi.description != description: reasons.append(f"Desc mismatch")
                 errors.append(f"Row {row_idx} ❌ 2-of-3 column match failed ({', '.join(reasons)}).")
                 continue
             
@@ -311,7 +300,6 @@ def run_processing(docname):
                 i_code = str(row[col_map["item_code"]]).strip()
                 l_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
                 
-                # Fetching again for creation
                 po_item_n = None
                 if l_val:
                     po_item_n = find_po_item_by_line(p_num, i_code, l_val)
