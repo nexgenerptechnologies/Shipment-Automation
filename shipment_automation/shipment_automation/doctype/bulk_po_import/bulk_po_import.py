@@ -4,7 +4,7 @@ from frappe.utils import flt, getdate
 import openpyxl
 from io import BytesIO
 import re
-from datetime import datetime
+import datetime
 
 
 @frappe.whitelist()
@@ -93,7 +93,7 @@ def validate_excel_date(date_val, row_idx, label):
         return None, None
         
     # If already a datetime object from Excel
-    if isinstance(date_val, (datetime, datetime.date)):
+    if isinstance(date_val, (datetime.datetime, datetime.date)):
         # Check for year sanity (e.g. 205 instead of 2025)
         if date_val.year < 2000 or date_val.year > 2100:
             return None, f"Row {row_idx} ❌ Invalid Year in {label}: {date_val.year}. Must be between 2000-2100."
@@ -139,7 +139,7 @@ def run_po_validation(docname):
             po_num    = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None and row[col_map["po_num"]] else ""
             line_val  = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
             
-            # ── NEW: Date Validation ──
+            # Date Validation
             raw_date = row[col_map["transaction_date"]] if col_map.get("transaction_date") is not None else None
             raw_req  = row[col_map["schedule_date"]] if col_map.get("schedule_date") is not None else None
             
