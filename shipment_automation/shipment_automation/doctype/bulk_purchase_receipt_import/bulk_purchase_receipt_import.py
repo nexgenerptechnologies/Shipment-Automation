@@ -13,7 +13,6 @@ def download_template():
     ws = wb.active
     ws.title = "Bulk PR Import Template"
     
-    # Updated headers as requested
     headers = [
         "Purchase Receipt Number", "Purchase Receipt Date", "Supplier Name", 
         "Purchase Order Number", "Item Code", "Item Name", 
@@ -117,13 +116,13 @@ def get_column_map(sheet):
         if not cell: continue
         clean = str(cell).strip().lower()
         for key, aliases in expected.items():
-            if any(a.lower() == clean for a in aliases):
+            if any(alias.lower() == clean for alias in aliases):
                 mapping[key] = idx
     return mapping
 
 
 def find_po_item_name(po_num, item_code, line_val=None):
-    """Safely finds a PO Item name, checking multiple field possibilities WITHOUT crashing on missing columns."""
+    """Safely finds a PO Item name, checking multiple field possibilities."""
     meta = frappe.get_meta("Purchase Order Item")
     available_fields = [f.fieldname for f in meta.fields]
     
@@ -136,6 +135,7 @@ def find_po_item_name(po_num, item_code, line_val=None):
             res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
             if res: return res
         
+        # Internal idx matching fallback
         import re
         match = re.search(r'(\d+)$', po_num)
         if match:
@@ -147,6 +147,7 @@ def find_po_item_name(po_num, item_code, line_val=None):
                     if res: return res
                 except: pass
 
+    # Always allow finding by item_code if line_val didn't match anything specific
     return frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
 
 
@@ -187,8 +188,6 @@ def run_validation(docname):
                 continue
 
             # Check if ANY Purchase Receipt (even Draft) already exists for this PO
-            # Note: Checking if items from this PO are already partially or fully received
-            # But the user specifically asked: "if the Purchase Receipt already created against Purchase Order"
             existing_pr = frappe.db.get_value("Purchase Receipt Item", {"purchase_order": po_num, "docstatus": ["<", 2]}, "parent")
             if existing_pr:
                 errors.append(f"Row {row_idx} ❌ A Purchase Receipt '{existing_pr}' already exists for PO '{po_num}'. Duplicate not allowed.")
@@ -199,26 +198,37 @@ def run_validation(docname):
                 errors.append(f"Row {row_idx} ❌ PO '{po_num}' belongs to '{po_supplier}', not '{supplier_name}'.")
                 continue
 
+            # ── NEW: Strict Matching ──
             target_item_name = find_po_item_name(po_num, item_code, line_val)
             if not target_item_name:
-                errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in PO '{po_num}'.")
+                errors.append(f"Row {row_idx} ❌ Item Code '{item_code}' with Line Number '{line_val}' not found in PO '{po_num}'.")
                 continue
             
             pi = frappe.get_doc("Purchase Order Item", target_item_name)
             
+            # Check Quantity and Rate matches first
+            if abs(pi.qty - qty_exc) > 0.01:
+                errors.append(f"Row {row_idx} ❌ Quantity mismatch: Excel {qty_exc} vs PO {pi.qty}")
+                continue
+            if abs(pi.rate - rate_exc) > 0.01:
+                errors.append(f"Row {row_idx} ❌ Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
+                continue
+
+            # Match 2 out of 3: Item Code, Item Name, Description
             score = 0
+            if pi.item_code == item_code: score += 1
             if pi.item_name == item_name: score += 1
             if pi.description == description: score += 1
             
-            if score >= 1:
-                if abs(pi.qty - qty_exc) > 0.01:
-                    errors.append(f"Row {row_idx} ❌ Quantity mismatch: Excel {qty_exc} vs PO {pi.qty}")
-                elif abs(pi.rate - rate_exc) > 0.01:
-                    errors.append(f"Row {row_idx} ❌ Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
-                else:
-                    ok_rows += 1
-            else:
-                errors.append(f"Row {row_idx} ❌ Data mismatch (Name/Description) with PO.")
+            if score < 2:
+                reasons = []
+                if pi.item_code != item_code: reasons.append(f"Code: {item_code} vs PO {pi.item_code}")
+                if pi.item_name != item_name: reasons.append(f"Name: {item_name} vs PO {pi.item_name}")
+                if pi.description != description: reasons.append(f"Desc mismatch")
+                errors.append(f"Row {row_idx} ❌ 2-of-3 column match failed ({', '.join(reasons)}).")
+                continue
+            
+            ok_rows += 1
 
         if not errors:
             doc.db_set("status", "Validated")
@@ -241,28 +251,33 @@ def run_processing(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
         
-        # Group by PR Number
-        pr_map = {}
+        # Grouping key: (PR Number, PR Date, Supplier)
+        # As requested: "If the Purchase Receipt, Date, Supplier is same... create one Purchase Receipt"
+        pr_groups = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
+            
             pr_id = str(row[col_map["pr_num"]]).strip()
-            if pr_id not in pr_map:
-                pr_map[pr_id] = []
-            pr_map[pr_id].append(row)
+            pr_date = str(row[col_map["pr_date"]]).strip() if row[col_map["pr_date"]] else "no-date"
+            supplier = str(row[col_map["supplier"]]).strip()
+            
+            group_key = (pr_id, pr_date, supplier)
+            if group_key not in pr_groups:
+                pr_groups[group_key] = []
+            pr_groups[group_key].append(row)
 
         created_receipts = []
-        for pr_id, rows in pr_map.items():
+        for (pr_id, pr_date_str, supplier), rows in pr_groups.items():
             first_row = rows[0]
-            s_name = str(first_row[col_map["supplier"]]).strip()
             po_num_first = str(first_row[col_map["po_num"]]).strip()
             pr_date_raw = first_row[col_map["pr_date"]]
             
             po_header = frappe.db.get_value("Purchase Order", po_num_first, ["company", "currency", "conversion_rate"], as_dict=True)
             
             pr = frappe.new_doc("Purchase Receipt")
-            pr.name = pr_id # FORCE PR NUMBER FROM EXCEL
+            pr.name = pr_id
             
-            # Series Matching logic
+            # Series Matching
             available_series = frappe.get_meta("Purchase Receipt").get_field("naming_series").options.split("\n")
             for series in available_series:
                 prefix = series.replace(".####", "").replace(".YY.", "").replace(".YYYY.", "").strip()
@@ -270,7 +285,7 @@ def run_processing(docname):
                     pr.naming_series = series
                     break
 
-            pr.supplier = s_name
+            pr.supplier = supplier
             pr.company = po_header.company or frappe.db.get_single_value("Global Defaults", "default_company")
             pr.currency = po_header.currency
             pr.conversion_rate = po_header.conversion_rate or 1.0
@@ -294,13 +309,10 @@ def run_processing(docname):
                 })
                 pr_item.run_method("set_missing_values")
                 
-                # Logic for line_number or custom_line_number
+                # Suffix/Line Logic
                 l_field = "line_number"
-                if not hasattr(pr_item, "line_number"):
-                    if hasattr(pr_item, "custom_line_number"):
-                        l_field = "custom_line_number"
-                
-                # If Excel has a line value, put it in. If empty, ignore it.
+                if not hasattr(pr_item, "line_number") and hasattr(pr_item, "custom_line_number"):
+                    l_field = "custom_line_number"
                 if l_val:
                     setattr(pr_item, l_field, l_val)
 
@@ -308,7 +320,6 @@ def run_processing(docname):
             pr.run_method("calculate_taxes_and_totals")
             pr.flags.ignore_permissions = True
             
-            # Deep Insert to bypass naming series
             pr.db_insert()
             for child in pr.get_all_children():
                 child.db_insert()
