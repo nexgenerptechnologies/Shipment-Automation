@@ -153,31 +153,22 @@ def parse_excel_date(date_val):
     if not date_val:
         return None
     
-    # ── CASE 1: Date Object (Excel auto-converted it) ──
-    # If Excel already converted 10/05 to October 5th, we need to SWAP it back
     if isinstance(date_val, (datetime.datetime, datetime.date)):
-        # If day <= 12, there is a high risk that month/day were swapped by Excel
         if date_val.day <= 12:
-             # Swapping back: old day becomes month, old month becomes day
              try:
                  return datetime.date(date_val.year, date_val.day, date_val.month).strftime("%Y-%m-%d")
              except ValueError:
-                 # If swap is invalid (e.g. 31/02), keep original
                  return date_val.strftime("%Y-%m-%d")
         return date_val.strftime("%Y-%m-%d")
 
-    # ── CASE 2: String/Text ──
     if isinstance(date_val, str):
         date_str = date_val.strip()
-        # Strictly force DD/MM/YYYY parsing
         for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"]:
             try:
                 dt = datetime.datetime.strptime(date_str, fmt)
                 return dt.strftime("%Y-%m-%d")
             except ValueError:
                 continue
-    
-    # Fallback
     try:
         res = getdate(date_val)
         return res.strftime("%Y-%m-%d") if res else None
@@ -198,6 +189,7 @@ def run_validation(docname):
         po_line_totals = {}
         po_line_rows = {}
         pr_number_map = {}
+        today = nowdate()
         
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row): continue
@@ -220,6 +212,7 @@ def run_validation(docname):
             if not pr_num:
                 row_errors.append("Purchase Receipt Number missing.")
             else:
+                # ── Conflict Check: Same PR # for different PO or Supplier ──
                 if pr_num not in pr_number_map:
                     pr_number_map[pr_num] = {"supplier": supplier_name, "po": po_num, "row": row_idx}
                 else:
@@ -229,6 +222,10 @@ def run_validation(docname):
 
                 if frappe.db.exists("Purchase Receipt", pr_num):
                     row_errors.append(f"Duplicate PR Number '{pr_num}' already exists.")
+
+            # ── Future Date Check ──
+            if pr_date_parsed and getdate(pr_date_parsed) > getdate(today):
+                row_errors.append(f"Purchase Receipt Number '{pr_num}', Date is future Date, psl correct the Purchase Receipt Date.")
 
             if not po_num or not frappe.db.exists("Purchase Order", po_num):
                 row_errors.append(f"PO '{po_num}' not found.")
