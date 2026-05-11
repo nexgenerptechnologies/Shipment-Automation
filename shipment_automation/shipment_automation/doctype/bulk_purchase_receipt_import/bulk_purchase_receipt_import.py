@@ -135,7 +135,6 @@ def find_po_item_name(po_num, item_code, line_val=None):
             res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
             if res: return res
         
-        # Internal idx matching fallback
         import re
         match = re.search(r'(\d+)$', po_num)
         if match:
@@ -147,7 +146,6 @@ def find_po_item_name(po_num, item_code, line_val=None):
                     if res: return res
                 except: pass
 
-    # Always allow finding by item_code if line_val didn't match anything specific
     return frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
 
 
@@ -180,33 +178,27 @@ def run_validation(docname):
                 continue
 
             if frappe.db.exists("Purchase Receipt", pr_num):
-                errors.append(f"Row {row_idx} ❌ Purchase Receipt '{pr_num}' already exists.")
+                errors.append(f"Row {row_idx} ❌ Duplicate Error: Purchase Receipt '{pr_num}' already exists in the system.")
                 continue
 
             if not po_num or not frappe.db.exists("Purchase Order", po_num):
                 errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' not found.")
                 continue
 
-            # Check if ANY Purchase Receipt (even Draft) already exists for this PO
-            existing_pr = frappe.db.get_value("Purchase Receipt Item", {"purchase_order": po_num, "docstatus": ["<", 2]}, "parent")
-            if existing_pr:
-                errors.append(f"Row {row_idx} ❌ A Purchase Receipt '{existing_pr}' already exists for PO '{po_num}'. Duplicate not allowed.")
-                continue
-
             po_supplier = frappe.db.get_value("Purchase Order", po_num, "supplier")
             if po_supplier != supplier_name:
-                errors.append(f"Row {row_idx} ❌ PO '{po_num}' belongs to '{po_supplier}', not '{supplier_name}'.")
+                errors.append(f"Row {row_idx} ❌ Supplier mismatch: PO belongs to '{po_supplier}', Excel has '{supplier_name}'.")
                 continue
 
-            # ── NEW: Strict Matching ──
+            # Target matching
             target_item_name = find_po_item_name(po_num, item_code, line_val)
             if not target_item_name:
-                errors.append(f"Row {row_idx} ❌ Item Code '{item_code}' with Line Number '{line_val}' not found in PO '{po_num}'.")
+                errors.append(f"Row {row_idx} ❌ Item '{item_code}' with Line '{line_val}' not found in PO '{po_num}'.")
                 continue
             
             pi = frappe.get_doc("Purchase Order Item", target_item_name)
             
-            # Check Quantity and Rate matches first
+            # Mandatory matches: Quantity and Rate
             if abs(pi.qty - qty_exc) > 0.01:
                 errors.append(f"Row {row_idx} ❌ Quantity mismatch: Excel {qty_exc} vs PO {pi.qty}")
                 continue
@@ -214,7 +206,7 @@ def run_validation(docname):
                 errors.append(f"Row {row_idx} ❌ Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
                 continue
 
-            # Match 2 out of 3: Item Code, Item Name, Description
+            # Combined column check logic as requested
             score = 0
             if pi.item_code == item_code: score += 1
             if pi.item_name == item_name: score += 1
@@ -251,8 +243,6 @@ def run_processing(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
         
-        # Grouping key: (PR Number, PR Date, Supplier)
-        # As requested: "If the Purchase Receipt, Date, Supplier is same... create one Purchase Receipt"
         pr_groups = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
@@ -274,10 +264,13 @@ def run_processing(docname):
             
             po_header = frappe.db.get_value("Purchase Order", po_num_first, ["company", "currency", "conversion_rate"], as_dict=True)
             
+            # Final check to prevent IntegrityError crash
+            if frappe.db.exists("Purchase Receipt", pr_id):
+                continue
+
             pr = frappe.new_doc("Purchase Receipt")
             pr.name = pr_id
             
-            # Series Matching
             available_series = frappe.get_meta("Purchase Receipt").get_field("naming_series").options.split("\n")
             for series in available_series:
                 prefix = series.replace(".####", "").replace(".YY.", "").replace(".YYYY.", "").strip()
@@ -309,7 +302,6 @@ def run_processing(docname):
                 })
                 pr_item.run_method("set_missing_values")
                 
-                # Suffix/Line Logic
                 l_field = "line_number"
                 if not hasattr(pr_item, "line_number") and hasattr(pr_item, "custom_line_number"):
                     l_field = "custom_line_number"
