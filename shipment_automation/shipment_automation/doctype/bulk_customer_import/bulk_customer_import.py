@@ -198,10 +198,14 @@ def run_processing(docname):
                     con.first_name = c_person
                     if col_map.get("email") is not None and row[col_map["email"]]:
                          con.append("email_ids", {"email_id": str(row[col_map["email"]]).strip(), "is_primary": 1})
-                    if col_map.get("mobile") is not None and row[col_map["mobile"]]:
-                         con.append("phone_nos", {"phone_number": str(row[col_map["mobile"]]).strip(), "is_primary": 1})
+                    
+                    mobile_val = str(row[col_map["mobile"]]).strip() if col_map.get("mobile") is not None and row[col_map["mobile"]] else ""
+                    if mobile_val:
+                         con.append("phone_nos", {"phone_number": mobile_val, "is_primary": 1})
+                    
                     con.append("links", {"link_doctype": "Customer", "link_name": c_doc.name})
-                    con.insert(ignore_permissions=True)
+                    con.flags.ignore_permissions = True
+                    con.insert()
 
                 created.append(f"✅ {c_doc.name}")
             except Exception as e:
