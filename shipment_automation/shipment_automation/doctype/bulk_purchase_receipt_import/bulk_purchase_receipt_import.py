@@ -118,24 +118,28 @@ def get_column_map(sheet):
 
 
 def find_po_item_name(po_num, item_code, line_val=None):
-    """Safely finds a PO Item name, checking multiple field possibilities."""
-    filters = {"parent": po_num, "item_code": item_code}
+    """Safely finds a PO Item name, checking multiple field possibilities WITHOUT crashing on missing columns."""
+    
+    # Get available columns for Purchase Order Item
+    meta = frappe.get_meta("Purchase Order Item")
+    available_fields = [f.fieldname for f in meta.fields]
     
     if line_val:
         # 1. Try 'line_number'
-        res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val}, "name")
-        if res: return res
+        if "line_number" in available_fields:
+            res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val}, "name")
+            if res: return res
         
         # 2. Try 'custom_line_number'
-        res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
-        if res: return res
+        if "custom_line_number" in available_fields:
+            res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
+            if res: return res
         
-        # 3. Fallback: Check if PO Number suffix matches part of line_val
+        # 3. Fallback: Internal idx matching
         import re
         match = re.search(r'(\d+)$', po_num)
         if match:
             suffix = match.group(1)
-            # If line_val is something like '4278-1', maybe search for idx=1?
             if line_val.startswith(f"{suffix}-"):
                 try:
                     idx_part = int(line_val.split("-")[-1])
@@ -143,8 +147,8 @@ def find_po_item_name(po_num, item_code, line_val=None):
                     if res: return res
                 except: pass
 
-    # If no line_val or not found by line_val, just find by item_code
-    return frappe.db.get_value("Purchase Order Item", filters, "name")
+    # Final Fallback: Just by item_code
+    return frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
 
 
 def run_validation(docname):
@@ -183,7 +187,6 @@ def run_validation(docname):
                 errors.append(f"Row {row_idx} ❌ PO '{po_num}' belongs to '{po_supplier}', not '{supplier_name}'.")
                 continue
 
-            # Find matching PO Line using safe helper
             target_item_name = find_po_item_name(po_num, item_code, line_val)
             
             if not target_item_name:
@@ -195,7 +198,6 @@ def run_validation(docname):
             
             pi = frappe.get_doc("Purchase Order Item", target_item_name)
             
-            # Match 2 out of (Item Name, Description)
             score = 0
             if pi.item_name == item_name: score += 1
             if pi.description == description: score += 1
