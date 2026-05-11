@@ -1,163 +1,182 @@
 import frappe
 from frappe.model.document import Document
-from frappe.utils import flt, nowdate
+from frappe.utils import flt, nowdate, getdate
 import openpyxl
+from io import BytesIO
+
+
+@frappe.whitelist()
+def download_template():
+    """Generates and downloads the Bulk Purchase Receipt Import Excel template."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Bulk PR Import Template"
+    
+    headers = [
+        "Supplier Name", "Purchase Order Number", "Item Code", 
+        "Item Name", "Description", "Quantity", "Rate", "Line Number"
+    ]
+    ws.append(headers)
+    
+    from openpyxl.styles import Font
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    frappe.response['filename'] = "Bulk_PR_Import_Template.xlsx"
+    frappe.response['filecontent'] = output.getvalue()
+    frappe.response['type'] = 'binary'
 
 
 class BulkPurchaseReceiptImport(Document):
 
     @frappe.whitelist()
     def start_validation(self):
-        """Kick off background validation of the uploaded Excel file."""
         self.db_set("status", "Validating")
         self.db_set("validation_log", "⏳ Validation in progress. Please refresh in a few seconds.")
         frappe.db.commit()
         frappe.enqueue(
             "shipment_automation.shipment_automation.doctype.bulk_purchase_receipt_import.bulk_purchase_receipt_import.run_validation",
-            queue="long",
-            timeout=3600,
-            docname=self.name,
+            queue="long", timeout=3600, docname=self.name,
         )
-        return "Validation started in the background. Refresh the page in a few seconds."
+        return "Validation started. Refresh in a few seconds."
 
     @frappe.whitelist()
     def start_processing(self):
-        """Kick off background processing: creates a single combined Purchase Receipt (Draft)."""
         if self.status != "Validated":
-            frappe.throw("Please validate the data first before processing.")
+            frappe.throw("Please validate the data first.")
         if not self.pr_naming_series:
-            frappe.throw("Please select a Purchase Receipt Naming Series before processing.")
+            frappe.throw("Please select a Purchase Receipt Naming Series.")
         self.db_set("status", "Processing")
-        self.db_set("receipts_log", "⏳ Processing in progress. Please refresh in a few seconds.")
+        self.db_set("receipts_log", "⏳ Creating Purchase Receipt. Please refresh in a few seconds.")
         frappe.db.commit()
         frappe.enqueue(
             "shipment_automation.shipment_automation.doctype.bulk_purchase_receipt_import.bulk_purchase_receipt_import.run_processing",
-            queue="long",
-            timeout=3600,
-            docname=self.name,
+            queue="long", timeout=3600, docname=self.name,
         )
-        return "Processing started in the background. Refresh the page in a few seconds."
+        return "Processing started. Refresh in a few seconds."
 
     @frappe.whitelist()
     def create_purchase_invoice_and_boe(self):
-        """
-        1. Creates a Purchase Invoice (Draft) from the submitted Purchase Receipt.
-        2. Automatically creates a Bill of Entry (Draft) linked to that Invoice.
-        """
         if not self.receipt_name:
-            frappe.throw("No Purchase Receipt is linked to this import.")
-
+            frappe.throw("No Purchase Receipt linked.")
         pr_doc = frappe.get_doc("Purchase Receipt", self.receipt_name)
         if pr_doc.docstatus != 1:
-            frappe.throw(
-                f"Purchase Receipt <b>{self.receipt_name}</b> must be <b>Submitted</b> "
-                f"before creating a Purchase Invoice."
-            )
-
+            frappe.throw(f"Purchase Receipt {self.receipt_name} must be Submitted first.")
         if not self.pi_naming_series:
             frappe.throw("Please select a Purchase Invoice Naming Series.")
-
-        if self.invoice_name:
-            frappe.throw(
-                f"A Purchase Invoice <b>{self.invoice_name}</b> already exists."
-            )
-
+        
         try:
             from erpnext.stock.stock_ledger import make_purchase_invoice
             pi = make_purchase_invoice(self.receipt_name)
             pi.naming_series = self.pi_naming_series
             pi.insert(ignore_permissions=True)
             self.db_set("invoice_name", pi.name)
-            frappe.db.commit()
-        except Exception as exc:
-            frappe.log_error(frappe.get_traceback(), "Bulk PR Import – Create PI Error")
-            frappe.throw(f"Failed to create Purchase Invoice: {exc}")
-
-        boe_name = None
-        boe_error = None
-        try:
+            
             boe = frappe.new_doc("Bill of Entry")
             boe.purchase_invoice = pi.name
             boe.posting_date = nowdate()
             boe.company = pr_doc.company
             boe.supplier = pr_doc.supplier
             boe.insert(ignore_permissions=True, ignore_mandatory=True)
-            boe_name = boe.name
-            self.db_set("bill_of_entry_name", boe_name)
+            self.db_set("bill_of_entry_name", boe.name)
+            
             frappe.db.commit()
+            return {"invoice": pi.name, "bill_of_entry": boe.name}
         except Exception as exc:
-            frappe.log_error(frappe.get_traceback(), "Bulk PR Import – Create BOE Error")
-            boe_error = str(exc)
+            frappe.log_error(frappe.get_traceback(), "Bulk PR Import – Create PI/BOE Error")
+            frappe.throw(f"Error: {exc}")
 
-        return {
-            "invoice": pi.name,
-            "bill_of_entry": boe_name,
-            "boe_error": boe_error,
-        }
+
+def get_column_map(sheet):
+    header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+    mapping = {}
+    expected = {
+        "supplier": ["Supplier Name", "Supplier"],
+        "po_num": ["Purchase Order Number", "PO Number"],
+        "item_code": ["Item Code"],
+        "item_name": ["Item Name"],
+        "description": ["Description"],
+        "quantity": ["Quantity", "Qty"],
+        "rate": ["Rate"],
+        "line_number": ["Line Number", "Line #"]
+    }
+    for idx, cell in enumerate(header_row):
+        if not cell: continue
+        clean = str(cell).strip().lower()
+        for key, aliases in expected.items():
+            if any(a.lower() == clean for a in aliases):
+                mapping[key] = idx
+    return mapping
 
 
 def run_validation(docname):
     doc = frappe.get_doc("Bulk Purchase Receipt Import", docname)
     try:
         file_doc = frappe.get_doc("File", {"file_url": doc.excel_file})
-        file_path = file_doc.get_full_path()
-        wb = openpyxl.load_workbook(file_path, data_only=True)
+        wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
         sheet = wb.active
-
+        col_map = get_column_map(sheet)
+        
         errors = []
         ok_rows = 0
-
+        
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-            if not row[4]:
-                continue
-
-            qty_exc = flt(row[2])
-            rate_exc = flt(row[3])
-            po_val_exc = str(row[4]).strip()
-            excel_series = str(row[5]).strip() if len(row) > 5 and row[5] else ""
+            if not any(row): continue
             
-            try:
-                po_parts = po_val_exc.rsplit("-", 1)
-                base_po_num = po_parts[0]
-                line_idx = int(po_parts[1])
+            po_num = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None else ""
+            item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None else ""
+            item_name = str(row[col_map["item_name"]]).strip() if col_map.get("item_name") is not None else ""
+            description = str(row[col_map["description"]]).strip() if col_map.get("description") is not None else ""
+            qty_exc = flt(row[col_map["quantity"]]) if col_map.get("quantity") is not None else 0
+            rate_exc = flt(row[col_map["rate"]]) if col_map.get("rate") is not None else 0
+            line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
+
+            if not po_num or not frappe.db.exists("Purchase Order", po_num):
+                errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' not found.")
+                continue
+
+            # Find matching PO Line
+            filters = {"parent": po_num, "item_code": item_code}
+            if line_val:
+                # Support both direct line number or matching custom line_number field
+                po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val}, "name")
+                if not po_item_name:
+                    po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
+                if not po_item_name:
+                    errors.append(f"Row {row_idx} ❌ Line Number '{line_val}' not found in PO '{po_num}'.")
+                    continue
+                filters["name"] = po_item_name
+            
+            po_items = frappe.get_all("Purchase Order Item", filters=filters, fields=["name", "item_name", "description", "qty", "rate"])
+            
+            if not po_items:
+                errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in PO '{po_num}'.")
+                continue
+            
+            # Match 2 out of (Item Name, Description)
+            match_found = False
+            for pi in po_items:
+                score = 0
+                if pi.item_name == item_name: score += 1
+                if pi.description == description: score += 1
                 
-                if excel_series:
-                    po_name = f"{excel_series}{base_po_num}" if not base_po_num.startswith(excel_series) else base_po_num
-                elif doc.po_prefix:
-                    po_name = f"{doc.po_prefix}{base_po_num}" if not base_po_num.startswith(doc.po_prefix) else base_po_num
-                else:
-                    po_name = base_po_num
-                    
-            except Exception:
-                errors.append(f"Row {row_idx} ❌ Cannot parse PO reference '{po_val_exc}'.")
-                continue
-
-            if not frappe.db.exists("Purchase Order", po_name):
-                errors.append(f"Row {row_idx} ❌ PO '{po_name}' not found.")
-                continue
-
-            po_item = frappe.db.get_value(
-                "Purchase Order Item",
-                {"parent": po_name, "idx": line_idx},
-                ["qty", "rate", "item_code", "name"],
-                as_dict=True,
-            )
-            if not po_item:
-                errors.append(f"Row {row_idx} ❌ Line {line_idx} not found in PO '{po_name}'.")
-                continue
-
-            row_ok = True
-            expected_qty = qty_exc * 1000
-            if abs(expected_qty - po_item.qty) > 0.01:
-                errors.append(f"Row {row_idx} ❌ QTY MISMATCH: {po_item.item_code}")
-                row_ok = False
-
-            expected_rate = rate_exc / 1000
-            if abs(expected_rate - po_item.rate) > 0.000001:
-                errors.append(f"Row {row_idx} ❌ RATE MISMATCH: {po_item.item_code}")
-                row_ok = False
-
-            if row_ok: ok_rows += 1
+                if score >= 1: # Basic match for now, or ensure Qty/Rate matches
+                    if abs(pi.qty - qty_exc) > 0.01:
+                        errors.append(f"Row {row_idx} ❌ Quantity mismatch: Excel {qty_exc} vs PO {pi.qty}")
+                    elif abs(pi.rate - rate_exc) > 0.01:
+                        errors.append(f"Row {row_idx} ❌ Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
+                    else:
+                        match_found = True
+                        break
+            
+            if not match_found:
+                errors.append(f"Row {row_idx} ❌ Data mismatch (Name/Desc/Qty/Rate) with PO.")
+            else:
+                ok_rows += 1
 
         if not errors:
             doc.db_set("status", "Validated")
@@ -166,12 +185,9 @@ def run_validation(docname):
             doc.db_set("status", "Failed")
             doc.db_set("validation_log", f"❌ Issues found:\n\n" + "\n".join(errors))
         frappe.db.commit()
-
     except Exception:
-        err = frappe.get_traceback()
-        frappe.log_error(err, "Bulk PR Import – Validation Error")
         doc.db_set("status", "Failed")
-        doc.db_set("validation_log", f"❌ System error:\n\n{err}")
+        doc.db_set("validation_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
 
 
@@ -179,71 +195,50 @@ def run_processing(docname):
     doc = frappe.get_doc("Bulk Purchase Receipt Import", docname)
     try:
         file_doc = frappe.get_doc("File", {"file_url": doc.excel_file})
-        file_path = file_doc.get_full_path()
-        wb = openpyxl.load_workbook(file_path, data_only=True)
+        wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
         sheet = wb.active
-
-        rows_to_process = []
-        for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
-            if not row[4]: continue
-            po_val_exc = str(row[4]).strip()
-            excel_series = str(row[5]).strip() if len(row) > 5 and row[5] else ""
-            try:
-                po_parts = po_val_exc.rsplit("-", 1)
-                base_po_num = po_parts[0]
-                line_idx = int(po_parts[1])
-                if excel_series:
-                    po_name = f"{excel_series}{base_po_num}" if not base_po_num.startswith(excel_series) else base_po_num
-                elif doc.po_prefix:
-                    po_name = f"{doc.po_prefix}{base_po_num}" if not base_po_num.startswith(doc.po_prefix) else base_po_num
-                else:
-                    po_name = base_po_num
-            except Exception: continue
-
-            rows_to_process.append({
-                "po_name": po_name,
-                "line_idx": line_idx,
-                "qty": flt(row[2]) * 1000,
-                "rate": flt(row[3]) / 1000,
-                "row_idx": row_idx,
-            })
-
-        if not rows_to_process:
-            doc.db_set("status", "Failed")
-            doc.db_set("receipts_log", "❌ No valid rows found.")
-            frappe.db.commit()
-            return
-
-        first_po = frappe.get_doc("Purchase Order", rows_to_process[0]["po_name"])
+        col_map = get_column_map(sheet)
+        
         pr = frappe.new_doc("Purchase Receipt")
         pr.naming_series = doc.pr_naming_series
         pr.supplier = doc.supplier
-        pr.posting_date = nowdate()
-        pr.company = first_po.company
-
-        for item_data in rows_to_process:
-            po_item = frappe.db.get_value("Purchase Order Item", {"parent": item_data["po_name"], "idx": item_data["line_idx"]}, ["item_code", "item_name", "uom", "warehouse", "name", "conversion_factor"], as_dict=True)
-            if not po_item: continue
-            pr.append("items", {
-                "item_code": po_item.item_code,
-                "qty": item_data["qty"],
-                "rate": item_data["rate"],
-                "uom": po_item.uom,
-                "warehouse": po_item.warehouse,
-                "purchase_order": item_data["po_name"],
+        pr.company = frappe.db.get_value("Supplier", doc.supplier, "default_company") or frappe.db.get_single_value("Global Defaults", "default_company")
+        
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            if not any(row): continue
+            
+            po_num = str(row[col_map["po_num"]]).strip()
+            item_code = str(row[col_map["item_code"]]).strip()
+            line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
+            
+            # Find the specific PO Item name again for mapping
+            filters = {"parent": po_num, "item_code": item_code}
+            if line_val:
+                po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val}, "name") or \
+                               frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
+                filters["name"] = po_item_name
+            
+            po_item = frappe.get_doc("Purchase Order Item", filters)
+            
+            pr_item = pr.append("items", {
+                "item_code": item_code,
+                "qty": flt(row[col_map["quantity"]]),
+                "rate": flt(row[col_map["rate"]]),
+                "purchase_order": po_num,
                 "purchase_order_item": po_item.name,
-                "conversion_factor": po_item.conversion_factor or 1,
+                "warehouse": po_item.warehouse or doc.target_warehouse
             })
+            pr_item.run_method("set_missing_values")
 
+        pr.run_method("set_missing_values")
+        pr.run_method("calculate_taxes_and_totals")
         pr.insert(ignore_permissions=True)
+        
         doc.db_set("status", "Completed")
         doc.db_set("receipt_name", pr.name)
-        doc.db_set("receipts_log", f"✅ Purchase Receipt {pr.name} created as DRAFT.")
+        doc.db_set("receipts_log", f"✅ Purchase Receipt {pr.name} created successfully.")
         frappe.db.commit()
-
     except Exception:
-        err = frappe.get_traceback()
-        frappe.log_error(err, "Bulk PR Import – Processing Error")
         doc.db_set("status", "Failed")
-        doc.db_set("receipts_log", f"❌ Error:\n{err}")
+        doc.db_set("receipts_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()

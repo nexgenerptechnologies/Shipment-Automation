@@ -63,6 +63,12 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
     },
 
     refresh: function (frm) {
+        // ── Download Template button ─────────────────────────────
+        frm.add_custom_button(__('Download Template'), function() {
+            window.open(frappe.urllib.get_full_url(
+                "/api/method/shipment_automation.shipment_automation.doctype.bulk_purchase_receipt_import.bulk_purchase_receipt_import.download_template"
+            ));
+        });
 
         // ── Status banner ────────────────────────────────────────
         const statusMsg = {
@@ -124,7 +130,6 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
         }
 
         // ── Create Purchase Invoice + BOE button ─────────────────
-        // Shown when: receipt exists, receipt is submitted, no invoice yet
         if (frm.doc.receipt_name && frm.doc.status === 'Completed' && !frm.doc.invoice_name) {
             frm.add_custom_button(__('Create Invoice & Bill of Entry'), function () {
                 if (!frm.doc.pi_naming_series) {
@@ -136,36 +141,22 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
                     return;
                 }
 
-                // First check if the receipt is submitted
                 frappe.db.get_value('Purchase Receipt', frm.doc.receipt_name, 'docstatus', (r) => {
                     if (r.docstatus !== 1) {
                         frappe.msgprint({
                             title: __('Purchase Receipt Not Submitted'),
                             indicator: 'orange',
                             message: `Purchase Receipt <b>${frm.doc.receipt_name}</b> is still in Draft. 
-                                      Please open it, review, and <b>Submit</b> it first.
-                                      <br><br>
-                                      <a href="/app/purchase-receipt/${frm.doc.receipt_name}" 
-                                         target="_blank">Open Purchase Receipt →</a>`
+                                      Please open it, review, and <b>Submit</b> it first.`
                         });
                         return;
                     }
                     frappe.confirm(
-                        'This will:<br>'
-                        + '1. Create a <b>Purchase Invoice (Draft)</b> from the submitted receipt.<br>'
-                        + '2. Auto-create a <b>Bill of Entry (Draft)</b> linked to that invoice.<br><br>'
-                        + 'Continue?',
+                        'Create Purchase Invoice and Bill of Entry from this receipt?',
                         function () {
                             frappe.show_alert({ message: 'Creating Invoice and Bill of Entry...', indicator: 'blue' });
                             frm.call('create_purchase_invoice_and_boe').then(r => {
-                                const res = r.message;
-                                let msg = `✅ <b>Purchase Invoice</b>: <a href="/app/purchase-invoice/${res.invoice}" target="_blank">${res.invoice}</a>`;
-                                if (res.bill_of_entry) {
-                                    msg += `<br>✅ <b>Bill of Entry</b>: <a href="/app/bill-of-entry/${res.bill_of_entry}" target="_blank">${res.bill_of_entry}</a>`;
-                                } else if (res.boe_error) {
-                                    msg += `<br>⚠️ Bill of Entry could not be created automatically: ${res.boe_error}`;
-                                }
-                                frappe.msgprint({ title: 'Documents Created', message: msg, indicator: 'green' });
+                                frappe.msgprint({ title: 'Success', message: 'Documents Created Successfully', indicator: 'green' });
                                 frm.reload_doc();
                             });
                         }
@@ -174,7 +165,6 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
             }).addClass('btn-primary');
         }
 
-        // ── Re-validate button (after Failed) ───────────────────
         if (frm.doc.status === 'Failed' && frm.doc.excel_file && !frm.doc.receipt_name) {
             frm.add_custom_button(__('Re-validate'), function () {
                 frm.set_value('status', 'Draft');
