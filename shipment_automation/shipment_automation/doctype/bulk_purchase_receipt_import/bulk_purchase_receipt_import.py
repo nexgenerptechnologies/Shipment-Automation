@@ -159,9 +159,9 @@ def run_validation(docname):
         errors = []
         ok_rows = 0
         
-        # ── Grouping for Total Quantity check ──
-        # Group by: (PO Number, Item Code, Line Number)
+        # ── Grouping for Multi-Line Total Quantity check ──
         po_line_totals = {}
+        po_line_rows = {} # Track row numbers for detailed error message
         
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row): continue
@@ -213,14 +213,19 @@ def run_validation(docname):
                 if po_item_name:
                     pi = frappe.get_doc("Purchase Order Item", po_item_name)
                     
-                    # Accumulate totals for over-receipt check across multiple rows
+                    # Accumulate totals for consolidation check
                     total_key = (po_num, item_code, line_val)
                     if total_key not in po_line_totals:
-                        po_line_totals[total_key] = 0
-                    po_line_totals[total_key] += qty_exc
+                        po_line_totals[total_key] = 0.0
+                        po_line_rows[total_key] = []
                     
+                    po_line_totals[total_key] += qty_exc
+                    po_line_rows[total_key].append(str(row_idx))
+                    
+                    # Exact message requirement as requested
                     if po_line_totals[total_key] > flt(pi.qty) + 0.0000001:
-                        row_errors.append(f"Total Qty ({po_line_totals[total_key]}) exceeds PO Line Qty ({pi.qty}) for Line {line_val}")
+                        rows_str = " & ".join(po_line_rows[total_key])
+                        row_errors.append(f"total sum {po_line_totals[total_key]} of row number {rows_str} are more than Purchase Order Line Quantity {line_val}")
                     
                     # Rate MUST match exactly
                     if abs(flt(pi.rate) - flt(rate_exc)) > 0.0000001:
@@ -283,7 +288,9 @@ def run_processing(docname):
             pr = frappe.new_doc("Purchase Receipt")
             pr.name = pr_id
             
+            # ── FIX: Ensure Naming Series is ALWAYS set for valid Series Matching ──
             available_series = frappe.get_meta("Purchase Receipt").get_field("naming_series").options.split("\n")
+            pr.naming_series = available_series[0] # Default Fallback
             for series in available_series:
                 prefix = series.replace(".####", "").replace(".YY.", "").replace(".YYYY.", "").strip()
                 if pr_id.startswith(prefix):
@@ -294,7 +301,11 @@ def run_processing(docname):
             pr.company = po_header.company or frappe.db.get_single_value("Global Defaults", "default_company")
             pr.currency = po_header.currency
             pr.conversion_rate = po_header.conversion_rate or 1.0
+            
+            # ── FIX: Enable 'Edit Posting Date and Time' internally for import ──
+            pr.set_posting_time = 1
             pr.posting_date = getdate(pr_date_raw) if pr_date_raw else nowdate()
+            pr.posting_time = "00:00:00"
 
             for row in rows:
                 p_num = str(row[col_map["po_num"]]).strip()
@@ -327,6 +338,8 @@ def run_processing(docname):
             pr.run_method("set_missing_values")
             pr.run_method("calculate_taxes_and_totals")
             pr.flags.ignore_permissions = True
+            
+            # Bypass naming series logic
             pr.db_insert()
             for child in pr.get_all_children(): child.db_insert()
             pr.run_method("on_update")
