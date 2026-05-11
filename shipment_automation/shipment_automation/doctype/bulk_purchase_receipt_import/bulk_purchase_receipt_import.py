@@ -16,9 +16,7 @@ def download_template():
     headers = [
         "Purchase Receipt Number", "Purchase Receipt Date", "Supplier Name", 
         "Purchase Order Number", "Item Code", "Item Name", 
-        "Description", "Quantity", "Rate", "Line Number",
-        "Purchase Invoice Number", "Purchase Invoice Date",
-        "Bill of Entry Number", "Bill of Entry Date"
+        "Description", "Quantity", "Rate", "Line Number"
     ]
     ws.append(headers)
     
@@ -61,91 +59,6 @@ class BulkPurchaseReceiptImport(Document):
         )
         return "Processing started. Refresh in a few seconds."
 
-    @frappe.whitelist()
-    def create_purchase_invoice_and_boe(self):
-        """Processes the Excel file again to create Invoices and BOEs with custom IDs and Dates."""
-        if self.status != "Completed":
-             frappe.throw("Please process the Purchase Receipts first.")
-        
-        file_doc = frappe.get_doc("File", {"file_url": self.excel_file})
-        wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
-        sheet = wb.active
-        col_map = get_column_map(sheet)
-        
-        # Group by PR Number to ensure we only create one Invoice/BOE per PR
-        pr_groups = {}
-        for row in sheet.iter_rows(min_row=2, values_only=True):
-            if not any(row): continue
-            pr_id = str(row[col_map["pr_num"]]).strip()
-            if pr_id not in pr_groups:
-                pr_groups[pr_id] = row
-
-        created = []
-        for pr_id, row in pr_groups.items():
-            try:
-                # 1. Fetch the Purchase Receipt created in previous step
-                if not frappe.db.exists("Purchase Receipt", pr_id):
-                    created.append(f"❌ {pr_id}: Purchase Receipt not found.")
-                    continue
-                
-                pr_doc = frappe.get_doc("Purchase Receipt", pr_id)
-                
-                # Check for mandatory custom IDs from Excel
-                pi_id = str(row[col_map["pi_num"]]).strip() if col_map.get("pi_num") is not None and row[col_map["pi_num"]] else ""
-                pi_date = parse_excel_date(row[col_map["pi_date"]]) if col_map.get("pi_date") is not None else None
-                boe_id = str(row[col_map["boe_num"]]).strip() if col_map.get("boe_num") is not None and row[col_map["boe_num"]] else ""
-                boe_date = parse_excel_date(row[col_map["boe_date"]]) if col_map.get("boe_date") is not None else None
-                
-                if not pi_id or not boe_id:
-                    created.append(f"❌ {pr_id}: Purchase Invoice Number or BOE Number missing in Excel.")
-                    continue
-
-                # 2. Create Purchase Invoice
-                if not frappe.db.exists("Purchase Invoice", pi_id):
-                    from erpnext.buying.doctype.purchase_receipt.purchase_receipt import make_purchase_invoice
-                    pi = make_purchase_invoice(pr_id)
-                    pi.name = pi_id
-                    pi.posting_date = pi_date or nowdate()
-                    pi.bill_no = pi_id # Often used as Supplier Invoice No
-                    
-                    # Set Naming Series
-                    pi_series = frappe.get_meta("Purchase Invoice").get_field("naming_series").options.split("\n")
-                    pi.naming_series = pi_series[0]
-                    for s in pi_series:
-                        if pi_id.startswith(s.replace(".####", "").replace(".YY.", "").strip()):
-                            pi.naming_series = s
-                            break
-
-                    pi.flags.ignore_permissions = True
-                    pi.insert()
-                    pi.submit()
-                    invoice_name = pi.name
-                else:
-                    invoice_name = pi_id
-
-                # 3. Create Bill of Entry
-                if not frappe.db.exists("Bill of Entry", boe_id):
-                    boe = frappe.new_doc("Bill of Entry")
-                    boe.name = boe_id
-                    boe.purchase_invoice = invoice_name
-                    boe.posting_date = boe_date or nowdate()
-                    boe.bill_of_entry_number = boe_id
-                    boe.bill_of_entry_date = boe_date or nowdate()
-                    boe.company = pr_doc.company
-                    boe.supplier = pr_doc.supplier
-                    boe.flags.ignore_permissions = True
-                    boe.insert(ignore_mandatory=True)
-                    # boe.submit() # Bill of Entry is usually a Custom DocType, depends if it has submit
-                    boe_name = boe.name
-                else:
-                    boe_name = boe_id
-                
-                created.append(f"✅ {pr_id} -> Invoice {invoice_name}, BOE {boe_name}")
-            except Exception as e:
-                created.append(f"❌ {pr_id}: {str(e)}")
-        
-        frappe.db.commit()
-        return {"summary": "\n".join(created)}
 
 
 def get_column_map(sheet):

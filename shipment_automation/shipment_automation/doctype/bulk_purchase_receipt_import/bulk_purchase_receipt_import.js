@@ -49,21 +49,6 @@ frappe.ui.form.on('Bulk Purchase Receipt Import', {
             }).addClass('btn-success');
         }
 
-        // ── Create Invoices & BOE button ─────────────────
-        if (frm.doc.status === 'Completed') {
-            frm.add_custom_button(__('Create Invoices & Bills of Entry'), function () {
-                frappe.confirm(
-                    'Create Purchase Invoices and Bills of Entry for all created receipts?',
-                    function () {
-                        frappe.show_alert({ message: 'Processing Documents...', indicator: 'blue' });
-                        frm.call('create_purchase_invoice_and_boe').then(r => {
-                            frappe.msgprint({ title: 'Batch Result', message: r.message.summary, indicator: 'green' });
-                            frm.reload_doc();
-                        });
-                    }
-                );
-            }).addClass('btn-primary');
-        }
     },
 
     // ── Re-show Validate button when file is changed ──
