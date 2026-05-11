@@ -119,23 +119,18 @@ def get_column_map(sheet):
 
 def find_po_item_name(po_num, item_code, line_val=None):
     """Safely finds a PO Item name, checking multiple field possibilities WITHOUT crashing on missing columns."""
-    
-    # Get available columns for Purchase Order Item
     meta = frappe.get_meta("Purchase Order Item")
     available_fields = [f.fieldname for f in meta.fields]
     
     if line_val:
-        # 1. Try 'line_number'
         if "line_number" in available_fields:
             res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "line_number": line_val}, "name")
             if res: return res
         
-        # 2. Try 'custom_line_number'
         if "custom_line_number" in available_fields:
             res = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "custom_line_number": line_val}, "name")
             if res: return res
         
-        # 3. Fallback: Internal idx matching
         import re
         match = re.search(r'(\d+)$', po_num)
         if match:
@@ -147,7 +142,6 @@ def find_po_item_name(po_num, item_code, line_val=None):
                     if res: return res
                 except: pass
 
-    # Final Fallback: Just by item_code
     return frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
 
 
@@ -243,10 +237,14 @@ def run_processing(docname):
 
         created_receipts = []
         for s_name, rows in supplier_map.items():
+            # Get the first PO of this supplier to inherit company
+            first_po_in_list = str(rows[0][col_map["po_num"]]).strip()
+            comp = frappe.db.get_value("Purchase Order", first_po_in_list, "company")
+            
             pr = frappe.new_doc("Purchase Receipt")
             pr.naming_series = "PR-.YY.-"
             pr.supplier = s_name
-            pr.company = frappe.db.get_value("Supplier", s_name, "default_company") or frappe.db.get_single_value("Global Defaults", "default_company")
+            pr.company = comp or frappe.db.get_single_value("Global Defaults", "default_company")
             pr.posting_date = nowdate()
 
             for row in rows:
