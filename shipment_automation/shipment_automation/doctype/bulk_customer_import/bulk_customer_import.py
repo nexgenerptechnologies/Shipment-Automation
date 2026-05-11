@@ -158,7 +158,18 @@ def run_processing(docname):
             series = str(row[col_map["series"]]).strip() if col_map.get("series") is not None and row[col_map["series"]] else ""
             customer_name = str(row[col_map["name"]]).strip()
             group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else "All Customer Groups"
+            
+            # Check if group is a 'Group' type
+            if frappe.db.get_value("Customer Group", group, "is_group"):
+                created.append(f"❌ {customer_name}: Cannot select a Group type Customer Group ({group}). Please select a non-group Customer Group.")
+                continue
+            
             territory = str(row[col_map["territory"]]).strip() if col_map.get("territory") is not None and row[col_map["territory"]] else "All Territories"
+            
+            # Check if territory is a 'Group' type
+            if frappe.db.get_value("Territory", territory, "is_group"):
+                created.append(f"❌ {customer_name}: Cannot select a Group type Territory ({territory}). Please select a non-group Territory.")
+                continue
             gst_cat = str(row[col_map["gst_cat"]]).strip() if col_map.get("gst_cat") is not None else ""
             gstin = str(row[col_map["gstin"]]).strip() if col_map.get("gstin") is not None and row[col_map["gstin"]] else ""
             
