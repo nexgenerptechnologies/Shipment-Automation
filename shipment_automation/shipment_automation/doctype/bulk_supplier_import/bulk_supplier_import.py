@@ -196,16 +196,20 @@ def run_processing(docname):
                 if c_person:
                     con = frappe.new_doc("Contact")
                     con.first_name = c_person
+                    con.append("links", {"link_doctype": "Supplier", "link_name": s_doc.name})
+                    con.flags.ignore_permissions = True
+                    con.db_insert()
+                    
                     if col_map.get("email") is not None and row[col_map["email"]]:
-                         con.append("email_ids", {"email_id": str(row[col_map["email"]]).strip(), "is_primary": 1})
+                         e_row = con.append("email_ids", {"email_id": str(row[col_map["email"]]).strip(), "is_primary": 1})
+                         e_row.db_insert()
                     
                     mobile_val = str(row[col_map["mobile"]]).strip() if col_map.get("mobile") is not None and row[col_map["mobile"]] else ""
                     if mobile_val:
-                         con.append("phone_nos", {"phone_number": mobile_val, "is_primary": 1})
+                         p_row = con.append("phone_nos", {"phone_number": mobile_val, "is_primary": 1})
+                         p_row.db_insert()
                     
-                    con.append("links", {"link_doctype": "Supplier", "link_name": s_doc.name})
-                    con.flags.ignore_permissions = True
-                    con.insert()
+                    con.run_method("on_update")
 
                 created.append(f"✅ {s_doc.name}")
             except Exception as e:
