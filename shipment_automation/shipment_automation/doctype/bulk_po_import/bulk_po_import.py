@@ -4,6 +4,7 @@ from frappe.utils import flt, getdate
 import openpyxl
 from io import BytesIO
 import re
+from datetime import datetime
 
 
 @frappe.whitelist()
@@ -86,6 +87,30 @@ def get_column_map(sheet):
     return mapping
 
 
+def validate_excel_date(date_val, row_idx, label):
+    """Checks if a date value from Excel is valid. Returns (getdate_obj, error_msg)"""
+    if not date_val:
+        return None, None
+        
+    # If already a datetime object from Excel
+    if isinstance(date_val, (datetime, datetime.date)):
+        # Check for year sanity (e.g. 205 instead of 2025)
+        if date_val.year < 2000 or date_val.year > 2100:
+            return None, f"Row {row_idx} ❌ Invalid Year in {label}: {date_val.year}. Must be between 2000-2100."
+        return getdate(date_val), None
+        
+    # If string, try to parse
+    date_str = str(date_val).strip()
+    try:
+        # Try ERPNext getdate
+        parsed = getdate(date_str)
+        if parsed.year < 2000 or parsed.year > 2100:
+            return None, f"Row {row_idx} ❌ Invalid Year in {label}: {parsed.year}."
+        return parsed, None
+    except Exception:
+        return None, f"Row {row_idx} ❌ Cannot parse {label} '{date_str}'. Use DD-MM-YYYY."
+
+
 def run_po_validation(docname):
     doc = frappe.get_doc("Bulk PO Import", docname)
     try:
@@ -113,23 +138,26 @@ def run_po_validation(docname):
             supplier  = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None and row[col_map["supplier"]] else ""
             po_num    = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None and row[col_map["po_num"]] else ""
             line_val  = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
+            
+            # ── NEW: Date Validation ──
+            raw_date = row[col_map["transaction_date"]] if col_map.get("transaction_date") is not None else None
+            raw_req  = row[col_map["schedule_date"]] if col_map.get("schedule_date") is not None else None
+            
+            _, date_err = validate_excel_date(raw_date, row_idx, "Date")
+            if date_err: errors.append(date_err)
+            
+            _, req_err = validate_excel_date(raw_req, row_idx, "Required By")
+            if req_err: errors.append(req_err)
 
             if not po_num:
                 errors.append(f"Row {row_idx} ❌ PO Number is missing.")
                 continue
             
-            # ── NEW: Validation for Line Number ──
             if line_val:
-                # Get last digits of PO Number
                 match = re.search(r'(\d+)$', po_num)
                 po_suffix = match.group(1) if match else po_num
-                
-                # Check if line_val starts with that suffix
                 if not line_val.startswith(f"{po_suffix}-"):
-                    errors.append(
-                        f"Row {row_idx} ❌ Invalid Line Number '{line_val}'. "
-                        f"Must start with '{po_suffix}-' (from PO {po_num})"
-                    )
+                    errors.append(f"Row {row_idx} ❌ Invalid Line Number '{line_val}'. Must start with '{po_suffix}-'")
                     continue
 
             if po_num in po_supplier_map and po_supplier_map[po_num] != supplier:
@@ -255,7 +283,6 @@ def run_po_creation(docname):
                 
             po.run_method("on_update")
             
-            # ── SET FINAL LINE NUMBERS ──
             match = re.search(r'(\d+)$', p_num)
             base_suffix = match.group(1) if match else p_num
             
@@ -265,7 +292,6 @@ def run_po_creation(docname):
                     line_field = "custom_line_number"
 
             for idx, item in enumerate(po.items, start=1):
-                # If Excel has a value, we've already validated it starts with the correct suffix
                 value = data["items"][idx-1]["line_number"] or f"{base_suffix}-{idx}"
                 item.db_set(line_field, value)
             
