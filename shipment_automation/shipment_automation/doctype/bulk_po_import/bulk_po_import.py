@@ -200,44 +200,56 @@ def run_po_creation(docname):
                 created.append(f"⚠️ {p_num} already exists.")
                 continue
 
-            po = frappe.new_doc("Purchase Order")
-            po.name = p_num 
-            po.supplier = data["supplier"]
-            po.company = company
-            po.transaction_date = getdate(data["transaction_date"]) if data["transaction_date"] else None
-            po.schedule_date = getdate(data["schedule_date"]) if data["schedule_date"] else None
+            # Create a clean dictionary for construction
+            po_dict = {
+                "doctype": "Purchase Order",
+                "name": p_num,
+                "supplier": data["supplier"],
+                "company": company,
+                "transaction_date": getdate(data["transaction_date"]) if data["transaction_date"] else None,
+                "schedule_date": getdate(data["schedule_date"]) if data["schedule_date"] else None,
+                "items": []
+            }
             
-            # Fetch default Currency and Category from supplier
+            po = frappe.get_doc(po_dict)
+            
+            # 1. Fetch Currency, Category, and basic template
             po.run_method("set_missing_values")
             
-            # ── FIX: Ensure Currency is set to Supplier's Billing Currency ──
+            # Ensure Currency is set to Supplier's Billing Currency
             supplier_currency = frappe.db.get_value("Supplier", po.supplier, "default_currency")
             if supplier_currency:
                 po.currency = supplier_currency
-                po.run_method("set_missing_values") # Update exchange rates based on new currency
+                po.run_method("set_missing_values")
             
             if not po.conversion_rate:
                 po.conversion_rate = 1.0
             
+            # 2. Add items
             for item_data in data["items"]:
                 po_item = po.append("items", {
                     "item_code": item_data["item_code"],
                     "qty": item_data["qty"],
                     "rate": item_data["rate"]
                 })
-                # Critical: Fetches Item Name, UOM, and Warehouse
                 po_item.run_method("set_missing_values")
 
-            po.flags.ignore_permissions = True
-            
-            # 3. Final calculation (Header-level)
+            # 3. Final calculation
             po.run_method("set_missing_values")
             po.run_method("calculate_taxes_and_totals")
 
-            # Use insert() instead of db_insert() to ensure all child items are saved correctly
-            po.insert()
+            po.flags.ignore_permissions = True
             
-            # Set custom line numbers
+            # ── THE FIX: Use po.db_insert() to force the NAME while retaining nested data ──
+            # This is the same logic as Data Import: it skips naming series entirely.
+            po.db_insert()
+            for child in po.get_all_children():
+                child.db_insert()
+                
+            # Run final on_update hooks
+            po.run_method("on_update")
+            
+            # 5. Handle custom line numbers
             import re
             match = re.search(r'(\d+)$', p_num)
             base_number = match.group(1) if match else p_num
