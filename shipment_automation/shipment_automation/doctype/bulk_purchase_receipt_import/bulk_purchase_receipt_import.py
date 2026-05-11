@@ -164,6 +164,7 @@ def run_validation(docname):
             if not any(row): continue
             
             pr_num = str(row[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and row[col_map["pr_num"]] else ""
+            raw_pr_date = row[col_map["pr_date"]] if col_map.get("pr_date") is not None else None
             supplier_name = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else ""
             po_num = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None else ""
             item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None else ""
@@ -173,24 +174,46 @@ def run_validation(docname):
             rate_exc = flt(row[col_map["rate"]]) if col_map.get("rate") is not None else 0
             line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
 
+            # 1. Purchase Receipt Number check
             if not pr_num:
                 errors.append(f"Row {row_idx} ❌ Purchase Receipt Number is missing.")
                 continue
 
             if frappe.db.exists("Purchase Receipt", pr_num):
-                errors.append(f"Row {row_idx} ❌ Duplicate Error: Purchase Receipt '{pr_num}' already exists in the system.")
+                errors.append(f"Row {row_idx} ❌ Duplicate Error: Purchase Receipt '{pr_num}' already exists in ERPNext.")
                 continue
 
+            # 2. Purchase Date check (Requirement: If PR Date exists but Number is already linked or date is logically invalid)
+            # Actually user asked: "If I am putting Purchase Date then it should also not be allowed and display message"
+            # Interpreting this as: "If PR Date is provided but does not match existing PR or is logically invalid"
+            # Or specifically if PR Date is before PO Date? Let's check against PO Date for sanity.
+            
+            # 3. PO existence check
             if not po_num or not frappe.db.exists("Purchase Order", po_num):
                 errors.append(f"Row {row_idx} ❌ Purchase Order '{po_num}' not found.")
                 continue
 
-            po_supplier = frappe.db.get_value("Purchase Order", po_num, "supplier")
-            if po_supplier != supplier_name:
-                errors.append(f"Row {row_idx} ❌ Supplier mismatch: PO belongs to '{po_supplier}', Excel has '{supplier_name}'.")
+            # Check PR Date vs PO Date
+            if raw_pr_date:
+                pr_date_obj = getdate(raw_pr_date)
+                po_date_obj = getdate(frappe.db.get_value("Purchase Order", po_num, "transaction_date"))
+                if pr_date_obj < po_date_obj:
+                    errors.append(f"Row {row_idx} ❌ PR Date ({pr_date_obj}) cannot be before PO Date ({po_date_obj}).")
+                    continue
+
+            # Check if any PR already exists for this PO
+            existing_pr = frappe.db.get_value("Purchase Receipt Item", {"purchase_order": po_num, "docstatus": ["<", 2]}, "parent")
+            if existing_pr:
+                errors.append(f"Row {row_idx} ❌ A Purchase Receipt '{existing_pr}' already exists for PO '{po_num}'. Multiple receipts not allowed.")
                 continue
 
-            # Target matching
+            # 4. Supplier match
+            po_supplier = frappe.db.get_value("Purchase Order", po_num, "supplier")
+            if po_supplier != supplier_name:
+                errors.append(f"Row {row_idx} ❌ Supplier mismatch: PO is for '{po_supplier}', Excel has '{supplier_name}'.")
+                continue
+
+            # 5. PO Item Match
             target_item_name = find_po_item_name(po_num, item_code, line_val)
             if not target_item_name:
                 errors.append(f"Row {row_idx} ❌ Item '{item_code}' with Line '{line_val}' not found in PO '{po_num}'.")
@@ -198,7 +221,7 @@ def run_validation(docname):
             
             pi = frappe.get_doc("Purchase Order Item", target_item_name)
             
-            # Mandatory matches: Quantity and Rate
+            # 6. Rate and Qty match (Strictly prohibited if higher or lower)
             if abs(pi.qty - qty_exc) > 0.01:
                 errors.append(f"Row {row_idx} ❌ Quantity mismatch: Excel {qty_exc} vs PO {pi.qty}")
                 continue
@@ -206,7 +229,8 @@ def run_validation(docname):
                 errors.append(f"Row {row_idx} ❌ Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
                 continue
 
-            # Combined column check logic as requested
+            # 7. 2-of-3 Column Logic as specified in the logic block
+            # (Supplier, PO, Qty, Rate, Line match) AND (2 of 3 Code, Name, Desc match)
             score = 0
             if pi.item_code == item_code: score += 1
             if pi.item_name == item_name: score += 1
@@ -214,10 +238,10 @@ def run_validation(docname):
             
             if score < 2:
                 reasons = []
-                if pi.item_code != item_code: reasons.append(f"Code: {item_code} vs PO {pi.item_code}")
-                if pi.item_name != item_name: reasons.append(f"Name: {item_name} vs PO {pi.item_name}")
-                if pi.description != description: reasons.append(f"Desc mismatch")
-                errors.append(f"Row {row_idx} ❌ 2-of-3 column match failed ({', '.join(reasons)}).")
+                if pi.item_code != item_code: reasons.append(f"Item Code mismatch")
+                if pi.item_name != item_name: reasons.append(f"Item Name mismatch")
+                if pi.description != description: reasons.append(f"Description mismatch")
+                errors.append(f"Row {row_idx} ❌ 2-of-3 match failed: {', '.join(reasons)}.")
                 continue
             
             ok_rows += 1
@@ -264,7 +288,6 @@ def run_processing(docname):
             
             po_header = frappe.db.get_value("Purchase Order", po_num_first, ["company", "currency", "conversion_rate"], as_dict=True)
             
-            # Final check to prevent IntegrityError crash
             if frappe.db.exists("Purchase Receipt", pr_id):
                 continue
 
