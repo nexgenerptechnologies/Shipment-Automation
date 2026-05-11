@@ -162,6 +162,8 @@ def run_validation(docname):
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row): continue
             
+            row_errors = [] # Collect all errors for this row in one go
+            
             pr_num = str(row[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and row[col_map["pr_num"]] else ""
             raw_pr_date = row[col_map["pr_date"]] if col_map.get("pr_date") is not None else None
             supplier_name = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else ""
@@ -174,69 +176,59 @@ def run_validation(docname):
             line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
 
             if not pr_num:
-                errors.append(f"Row {row_idx} ❌ Purchase Receipt Number missing.")
-                continue
-
-            if frappe.db.exists("Purchase Receipt", pr_num):
-                errors.append(f"Row {row_idx} ❌ Duplicate PR Number '{pr_num}' already exists.")
-                continue
+                row_errors.append("Purchase Receipt Number missing.")
+            elif frappe.db.exists("Purchase Receipt", pr_num):
+                row_errors.append(f"Duplicate PR Number '{pr_num}' already exists.")
 
             if not po_num or not frappe.db.exists("Purchase Order", po_num):
-                errors.append(f"Row {row_idx} ❌ PO '{po_num}' not found.")
-                continue
-
-            # Date check
-            if raw_pr_date:
-                pr_date_obj = getdate(raw_pr_date)
-                po_date_obj = getdate(frappe.db.get_value("Purchase Order", po_num, "transaction_date"))
-                if pr_date_obj < po_date_obj:
-                    errors.append(f"Row {row_idx} ❌ PR Date ({pr_date_obj}) cannot be before PO Date ({po_date_obj}).")
-                    continue
-
-            # Supplier check
-            po_supplier = frappe.db.get_value("Purchase Order", po_num, "supplier")
-            if po_supplier != supplier_name:
-                errors.append(f"Row {row_idx} ❌ Supplier mismatch: PO is for '{po_supplier}', Excel has '{supplier_name}'.")
-                continue
-
-            # Mandatory Line match
-            po_item_name = None
-            if line_val:
-                po_item_name = find_po_item_by_line(po_num, item_code, line_val)
-                if not po_item_name:
-                    errors.append(f"Row {row_idx} ❌ Line Number '{line_val}' for Item '{item_code}' not found in PO '{po_num}'.")
-                    continue
+                row_errors.append(f"PO '{po_num}' not found.")
             else:
-                po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
-                if not po_item_name:
-                    errors.append(f"Row {row_idx} ❌ Item '{item_code}' not found in PO '{po_num}'.")
-                    continue
+                # Date check
+                if raw_pr_date:
+                    pr_date_obj = getdate(raw_pr_date)
+                    po_date_obj = getdate(frappe.db.get_value("Purchase Order", po_num, "transaction_date"))
+                    if pr_date_obj < po_date_obj:
+                        row_errors.append(f"PR Date ({pr_date_obj}) cannot be before PO Date ({po_date_obj}).")
 
-            pi = frappe.get_doc("Purchase Order Item", po_item_name)
-            
-            # MANDATORY: Quantity and Rate MUST match exactly (up to 7 decimals as requested)
-            if abs(flt(pi.qty) - flt(qty_exc)) > 0.0000001:
-                errors.append(f"Row {row_idx} ❌ Qty mismatch: Excel {qty_exc} vs PO {pi.qty}")
-                continue
-            if abs(flt(pi.rate) - flt(rate_exc)) > 0.0000001:
-                errors.append(f"Row {row_idx} ❌ Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
-                continue
+                # Supplier check
+                po_supplier = frappe.db.get_value("Purchase Order", po_num, "supplier")
+                if po_supplier != supplier_name:
+                    row_errors.append(f"Supplier mismatch: PO is for '{po_supplier}', Excel has '{supplier_name}'.")
 
-            # CORE LOGIC: (Supplier, PO, Qty, Rate, Suffix match) AND (2 of 3 Code, Name, Desc match)
-            score = 0
-            if pi.item_code == item_code: score += 1
-            if pi.item_name == item_name: score += 1
-            if pi.description == description: score += 1
-            
-            if score < 2:
-                reasons = []
-                if pi.item_code != item_code: reasons.append(f"Code: {item_code} vs {pi.item_code}")
-                if pi.item_name != item_name: reasons.append(f"Name: {item_name} vs {pi.item_name}")
-                if pi.description != description: reasons.append(f"Desc mismatch")
-                errors.append(f"Row {row_idx} ❌ 2-of-3 column match failed ({', '.join(reasons)}).")
-                continue
-            
-            ok_rows += 1
+                # Mandatory Line match
+                po_item_name = None
+                if line_val:
+                    po_item_name = find_po_item_by_line(po_num, item_code, line_val)
+                    if not po_item_name:
+                        row_errors.append(f"Line Number '{line_val}' for Item '{item_code}' not found in PO '{po_num}'.")
+                else:
+                    po_item_name = frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
+                    if not po_item_name:
+                        row_errors.append(f"Item '{item_code}' not found in PO '{po_num}'.")
+
+                if po_item_name:
+                    pi = frappe.get_doc("Purchase Order Item", po_item_name)
+                    
+                    # ── MODIFIED QUANTITY LOGIC: ALLOW PARTIAL ──
+                    if flt(qty_exc) > flt(pi.qty) + 0.0000001:
+                        row_errors.append(f"Qty over-receipt: Excel {qty_exc} exceeds PO {pi.qty}")
+                    
+                    # Rate MUST match exactly
+                    if abs(flt(pi.rate) - flt(rate_exc)) > 0.0000001:
+                        row_errors.append(f"Rate mismatch: Excel {rate_exc} vs PO {pi.rate}")
+
+                    # 2-of-3 Logic
+                    score = 0
+                    if pi.item_code == item_code: score += 1
+                    if pi.item_name == item_name: score += 1
+                    if pi.description == description: score += 1
+                    if score < 2:
+                        row_errors.append("2-of-3 column match failed (Code/Name/Description).")
+
+            if row_errors:
+                errors.append(f"Row {row_idx} ❌ " + " | ".join(row_errors))
+            else:
+                ok_rows += 1
 
         if not errors:
             doc.db_set("status", "Validated")
