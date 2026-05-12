@@ -30,13 +30,13 @@ class BulkItemImport(Document):
         ws.title = "Item Import Template"
         
         headers = [
-            "Item Code", "Item Name", "Item Group", "Default Unit of Measure", 
-            "Opening Stock", "Valuation Rate", "Standard Selling Rate", "Is Stock Item (Yes/No)"
+            "Item Code", "Item Name", "Description", "HSN/SAC", 
+            "Item Group", "Default Unit of Measure", "Maintain Stock"
         ]
         ws.append(headers)
         
         # Add sample data
-        ws.append(["ITEM001", "Sample Item 1", "All Item Groups", "Nos", "10", "100", "150", "Yes"])
+        ws.append(["ITEM001", "Sample Item 1", "Detailed Description", "8413", "All Item Groups", "Nos", "Yes"])
         
         file_path = get_site_path("public", "files", "Bulk_Item_Import_Template.xlsx")
         wb.save(file_path)
@@ -61,8 +61,8 @@ def run_validation(docname):
         
         for i, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             item_code = clean_val(row[0])
-            item_group = clean_val(row[2])
-            uom = clean_val(row[3])
+            item_group = clean_val(row[4])
+            uom = clean_val(row[5])
             
             if not item_code:
                 errors.append(f"Row {i}: Item Code is missing.")
@@ -122,9 +122,11 @@ def run_processing(docname):
                     item.item_code = item_code
                 
                 item.item_name = clean_val(row[1])
-                item.item_group = clean_val(row[2]) or "All Item Groups"
-                item.stock_uom = clean_val(row[3]) or "Nos"
-                item.is_stock_item = 1 if clean_val(row[7]).lower() == "yes" else 0
+                item.description = clean_val(row[2])
+                item.gst_hsn_code = clean_val(row[3])
+                item.item_group = clean_val(row[4]) or "All Item Groups"
+                item.stock_uom = clean_val(row[5]) or "Nos"
+                item.is_stock_item = 1 if clean_val(row[6]).lower() == "yes" else 0
                 item.valuation_rate = flt(row[5])
                 item.standard_rate = flt(row[6])
                 
