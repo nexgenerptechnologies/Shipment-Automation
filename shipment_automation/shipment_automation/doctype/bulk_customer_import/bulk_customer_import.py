@@ -233,19 +233,18 @@ def run_processing(docname):
                 if c_person:
                     con = frappe.new_doc("Contact")
                     con.first_name = c_person
+                    # Link to the newly created customer name
                     con.append("links", {"link_doctype": "Customer", "link_name": c_doc.name})
                     con.flags.ignore_permissions = True
-                    con.db_insert()
+                    con.insert()
                     
                     if email:
-                         e_row = con.append("email_ids", {"email_id": email, "is_primary": 1})
-                         e_row.db_insert()
+                         con.add_email(email, is_primary=True)
                     
                     if mobile:
-                         p_row = con.append("phone_nos", {"phone_number": mobile, "is_primary": 1})
-                         p_row.db_insert()
+                         con.add_phone(mobile, is_primary=True)
                     
-                    con.run_method("on_update")
+                    con.save(ignore_permissions=True)
                 
                 # 4. Final Verification Message
                 msg = f"Customer {customer_name} created successfully"

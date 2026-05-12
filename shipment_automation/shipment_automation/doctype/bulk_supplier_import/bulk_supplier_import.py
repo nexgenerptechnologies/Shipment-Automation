@@ -229,19 +229,18 @@ def run_processing(docname):
                 if c_person:
                     con = frappe.new_doc("Contact")
                     con.first_name = c_person
+                    # Link to the newly created supplier name
                     con.append("links", {"link_doctype": "Supplier", "link_name": s_doc.name})
                     con.flags.ignore_permissions = True
-                    con.db_insert()
+                    con.insert() # Using insert instead of db_insert to ensure proper link building
                     
                     if email:
-                         e_row = con.append("email_ids", {"email_id": email, "is_primary": 1})
-                         e_row.db_insert()
+                         con.add_email(email, is_primary=True)
                     
                     if mobile:
-                         p_row = con.append("phone_nos", {"phone_number": mobile, "is_primary": 1})
-                         p_row.db_insert()
+                         con.add_phone(mobile, is_primary=True)
                     
-                    con.run_method("on_update")
+                    con.save(ignore_permissions=True)
                 
                 # 4. Final Verification Message
                 msg = f"Supplier {supplier_name} created successfully"
