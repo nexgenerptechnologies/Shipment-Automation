@@ -1,0 +1,95 @@
+{
+ "actions": [],
+ "autoname": "SA-ITEM-.YYYY.-.#####",
+ "creation": "2026-05-12 23:15:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_excel",
+  "image_zip",
+  "status",
+  "section_log",
+  "validation_log",
+  "processing_log"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_excel",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "Item Excel File",
+   "reqd": 1
+  },
+  {
+   "fieldname": "image_zip",
+   "fieldtype": "Attach",
+   "label": "Images Zip File",
+   "description": "Optional: Zip file containing images named exactly as Item Codes (e.g. ITEM001.jpg)"
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Draft\nValidating\nValidated\nProcessing\nCompleted\nFailed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_log",
+   "fieldtype": "Section Break",
+   "label": "Import Log"
+  },
+  {
+   "fieldname": "validation_log",
+   "fieldtype": "Long Text",
+   "label": "Validation Log",
+   "read_only": 1
+  },
+  {
+   "fieldname": "processing_log",
+   "fieldtype": "Long Text",
+   "label": "Processing Log",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-05-12 23:15:00.000000",
+ "modified_by": "Administrator",
+ "module": "Shipment Automation",
+ "name": "Bulk Item Import",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Stock Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
