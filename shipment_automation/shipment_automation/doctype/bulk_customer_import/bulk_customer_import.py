@@ -239,10 +239,10 @@ def run_processing(docname):
                     con.insert()
                     
                     if email:
-                         con.add_email(email, is_primary=True)
+                         con.add_email(email)
                     
                     if mobile:
-                         con.add_phone(mobile, is_primary=True)
+                         con.add_phone(mobile)
                     
                     con.save(ignore_permissions=True)
                 

@@ -235,10 +235,10 @@ def run_processing(docname):
                     con.insert() # Using insert instead of db_insert to ensure proper link building
                     
                     if email:
-                         con.add_email(email, is_primary=True)
+                         con.add_email(email) # Standard method without arguments
                     
                     if mobile:
-                         con.add_phone(mobile, is_primary=True)
+                         con.add_phone(mobile) # Standard method without arguments
                     
                     con.save(ignore_permissions=True)
                 
