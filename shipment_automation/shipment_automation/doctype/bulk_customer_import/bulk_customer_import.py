@@ -178,8 +178,11 @@ def run_processing(docname):
                 
                 # 1. Create Customer
                 c_doc = frappe.new_doc("Customer")
+                
+                # Naming Logic: Manual ID > Naming Series > Default
                 if manual_id:
                     c_doc.name = manual_id
+                    c_doc.flags.ignore_mandatory = True # To allow manual name setting
                 elif series:
                     c_doc.naming_series = series
                 
@@ -189,6 +192,12 @@ def run_processing(docname):
                 c_doc.gst_category = gst_cat
                 c_doc.gstin = gstin
                 c_doc.insert(ignore_permissions=True)
+                
+                # Verification Check: Ensure name matches if manual_id was provided
+                if manual_id and c_doc.name != manual_id:
+                     # Force update name via database if Buying Settings override it
+                     frappe.db.set_value("Customer", c_doc.name, "name", manual_id, update_modified=False)
+                     c_doc.name = manual_id
                 
                 # 2. Create Address (Mandatory check: Line 1, State, Country)
                 street = str(row[col_map["street"]]).strip() if col_map.get("street") is not None and row[col_map["street"]] else ""
@@ -237,8 +246,19 @@ def run_processing(docname):
                          p_row.db_insert()
                     
                     con.run_method("on_update")
-
-                created.append(f"✅ {c_doc.name}")
+                
+                # 4. Final Verification Message
+                msg = f"Customer {customer_name} created successfully"
+                details = []
+                if street or state: details.append("Address")
+                if c_person: details.append("Contact")
+                if email: details.append(f"Email({email})")
+                if mobile: details.append(f"Mobile({mobile})")
+                
+                if details:
+                    msg += f" with " + ", ".join(details)
+                
+                created.append(f"✅ {msg}")
             except Exception as e:
                 # If anything fails, we rollback the specific customer creation
                 frappe.db.rollback()

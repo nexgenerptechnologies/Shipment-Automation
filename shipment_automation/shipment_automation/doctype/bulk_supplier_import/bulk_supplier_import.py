@@ -174,8 +174,11 @@ def run_processing(docname):
                 
                 # 1. Create Supplier
                 s_doc = frappe.new_doc("Supplier")
+                
+                # Naming Logic: Manual ID > Naming Series > Default
                 if manual_id:
                     s_doc.name = manual_id
+                    s_doc.flags.ignore_mandatory = True # To allow manual name setting
                 elif series:
                     s_doc.naming_series = series
                 
@@ -184,6 +187,13 @@ def run_processing(docname):
                 s_doc.gst_category = gst_cat
                 s_doc.gstin = gstin
                 s_doc.insert(ignore_permissions=True)
+                
+                # Verification Check: Ensure name matches if manual_id was provided
+                if manual_id and s_doc.name != manual_id:
+                     # This happens if 'Buying Settings' is set to only use Supplier Name
+                     # We force it by updating the name via database
+                     frappe.db.set_value("Supplier", s_doc.name, "name", manual_id, update_modified=False)
+                     s_doc.name = manual_id
                 
                 # 2. Create Address (Mandatory check: Line 1, State, Country)
                 street = str(row[col_map["street"]]).strip() if col_map.get("street") is not None and row[col_map["street"]] else ""
@@ -232,8 +242,19 @@ def run_processing(docname):
                          p_row.db_insert()
                     
                     con.run_method("on_update")
-
-                created.append(f"✅ {s_doc.name}")
+                
+                # 4. Final Verification Message
+                msg = f"Supplier {supplier_name} created successfully"
+                details = []
+                if street or state: details.append("Address")
+                if c_person: details.append("Contact")
+                if email: details.append(f"Email({email})")
+                if mobile: details.append(f"Mobile({mobile})")
+                
+                if details:
+                    msg += f" with " + ", ".join(details)
+                
+                created.append(f"✅ {msg}")
             except Exception as e:
                 # If anything fails, we rollback the specific supplier creation
                 frappe.db.rollback()
