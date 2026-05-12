@@ -202,6 +202,11 @@ def run_processing(docname):
                 c_doc.customer_name = customer_name
                 c_doc.customer_group = group
                 c_doc.territory = territory
+                
+                # Auto-set GST Category if GSTIN is present
+                if gstin and (not gst_cat or gst_cat.lower() == "none"):
+                    gst_cat = "Registered Regular"
+                
                 c_doc.gst_category = gst_cat
                 c_doc.gstin = gstin
                 c_doc.insert(ignore_permissions=True)
@@ -216,7 +221,12 @@ def run_processing(docname):
                 street = clean_val(row[col_map["street"]])
                 state = clean_val(row[col_map["state"]])
                 country = clean_val(row[col_map["country"]])
-                if not country: country = "India"
+                
+                # Auto-set Country to India if GSTIN is present
+                if gstin and (not country or country.lower() == "none"):
+                    country = "India"
+                elif not country:
+                    country = "India"
 
                 if street or state: # If any address info is provided, enforce mandatory fields
                     if not street or not state or not country:
