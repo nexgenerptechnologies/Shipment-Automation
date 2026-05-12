@@ -235,10 +235,10 @@ def run_processing(docname):
                     con.insert() # Using insert instead of db_insert to ensure proper link building
                     
                     if email:
-                         con.add_email(email, is_primary=True)
+                         con.append("email_ids", {"email_id": email, "is_primary": 1})
                     
                     if mobile:
-                         con.add_phone(mobile, is_primary=True)
+                         con.append("phone_nos", {"phone_number": mobile, "is_primary": 1})
                     
                     con.save(ignore_permissions=True)
                 
