@@ -6,6 +6,11 @@ from io import BytesIO
 import datetime
 from shipment_automation.shipment_automation.utils import parse_excel_date
 
+def clean_val(val):
+    if val is None or str(val).strip().lower() == "none":
+        return ""
+    return str(val).strip()
+
 
 @frappe.whitelist()
 def download_template():
@@ -113,6 +118,9 @@ def run_validation(docname):
             if not supplier_name:
                 row_errors.append("Supplier Name is mandatory.")
 
+            if group and not frappe.db.exists("Supplier Group", group):
+                row_errors.append(f"Supplier Group '{group}' not found.")
+
             # Check Duplicates
             if manual_id and frappe.db.exists("Supplier", manual_id):
                 row_errors.append(f"Manual ID '{manual_id}' already exists.")
@@ -156,17 +164,18 @@ def run_processing(docname):
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
             
-            manual_id = str(row[col_map["id"]]).strip() if col_map.get("id") is not None and row[col_map["id"]] else ""
-            series = str(row[col_map["series"]]).strip() if col_map.get("series") is not None and row[col_map["series"]] else ""
-            supplier_name = str(row[col_map["name"]]).strip()
-            group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else ""
+            manual_id = clean_val(row[col_map["id"]])
+            series = clean_val(row[col_map["series"]])
+            supplier_name = clean_val(row[col_map["name"]])
+            group = clean_val(row[col_map["group"]])
             
             # Check if group is a 'Group' type (ERPNext requires a non-group child for transactions)
             if group and frappe.db.get_value("Supplier Group", group, "is_group"):
                 created.append(f"❌ {supplier_name}: Cannot select a Group type Supplier Group ({group}). Please select a non-group Supplier Group.")
+                any_error = True
                 continue
-            gst_cat = str(row[col_map["gst_cat"]]).strip() if col_map.get("gst_cat") is not None else ""
-            gstin = str(row[col_map["gstin"]]).strip() if col_map.get("gstin") is not None and row[col_map["gstin"]] else ""
+            gst_cat = clean_val(row[col_map["gst_cat"]])
+            gstin = clean_val(row[col_map["gstin"]])
             
             try:
                 # Use a transaction block (implicitly via insert/db_insert)
@@ -196,9 +205,10 @@ def run_processing(docname):
                      s_doc.name = manual_id
                 
                 # 2. Create Address (Mandatory check: Line 1, State, Country)
-                street = str(row[col_map["street"]]).strip() if col_map.get("street") is not None and row[col_map["street"]] else ""
-                state = str(row[col_map["state"]]).strip() if col_map.get("state") is not None and row[col_map["state"]] else ""
-                country = str(row[col_map["country"]]).strip() if col_map.get("country") is not None and row[col_map["country"]] else "India"
+                street = clean_val(row[col_map["street"]])
+                state = clean_val(row[col_map["state"]])
+                country = clean_val(row[col_map["country"]])
+                if not country: country = "India"
 
                 if street or state: # If any address info is provided, enforce mandatory fields
                     if not street or not state or not country:
@@ -208,11 +218,11 @@ def run_processing(docname):
                     addr.address_title = supplier_name
                     addr.address_type = "Billing"
                     addr.address_line1 = street
-                    addr.city = str(row[col_map["city"]]).strip() if col_map.get("city") is not None and row[col_map["city"]] != "None" else ""
+                    addr.city = clean_val(row[col_map["city"]])
                     addr.state = state
                     
                     # Validate Pincode (6 digits, not starting with 0 for India)
-                    pincode = str(row[col_map["pincode"]]).strip() if col_map.get("pincode") is not None and row[col_map["pincode"]] != "None" else ""
+                    pincode = clean_val(row[col_map["pincode"]])
                     if pincode and (len(pincode) != 6 or pincode.startswith("0")):
                          pincode = "" # Clear invalid pincode to prevent error
                     
@@ -222,9 +232,9 @@ def run_processing(docname):
                     addr.insert(ignore_permissions=True)
 
                 # 3. Create Contact
-                c_person = str(row[col_map["contact_name"]]).strip() if col_map.get("contact_name") is not None and row[col_map["contact_name"]] else ""
-                email = str(row[col_map["email"]]).strip() if col_map.get("email") is not None and row[col_map["email"]] else ""
-                mobile = str(row[col_map["mobile"]]).strip() if col_map.get("mobile") is not None and row[col_map["mobile"]] else ""
+                c_person = clean_val(row[col_map["contact_name"]])
+                email = clean_val(row[col_map["email"]])
+                mobile = clean_val(row[col_map["mobile"]])
 
                 if c_person:
                     con = frappe.new_doc("Contact")
@@ -258,8 +268,13 @@ def run_processing(docname):
                 # If anything fails, we rollback the specific supplier creation
                 frappe.db.rollback()
                 created.append(f"❌ {supplier_name}: {str(e)}")
+                any_error = True
 
-        doc.db_set("status", "Completed")
+        if any_error:
+            doc.db_set("status", "Failed")
+        else:
+            doc.db_set("status", "Completed")
+        
         doc.db_set("processing_log", "SUMMARY:\n" + "\n".join(created))
         frappe.db.commit()
     except Exception:
