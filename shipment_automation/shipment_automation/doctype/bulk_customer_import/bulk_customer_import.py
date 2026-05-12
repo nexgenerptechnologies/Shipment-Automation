@@ -205,7 +205,13 @@ def run_processing(docname):
                     addr.address_line1 = street
                     addr.city = str(row[col_map["city"]]).strip() if col_map.get("city") is not None else ""
                     addr.state = state
-                    addr.pincode = str(row[col_map["pincode"]]).strip() if col_map.get("pincode") is not None else ""
+                    
+                    # Validate Pincode (6 digits, not starting with 0 for India)
+                    pincode = str(row[col_map["pincode"]]).strip() if col_map.get("pincode") is not None else ""
+                    if pincode and (len(pincode) != 6 or pincode.startswith("0")):
+                         pincode = "" # Clear invalid pincode to prevent error
+                    
+                    addr.pincode = pincode
                     addr.country = country
                     addr.append("links", {"link_doctype": "Customer", "link_name": c_doc.name})
                     addr.insert(ignore_permissions=True)
