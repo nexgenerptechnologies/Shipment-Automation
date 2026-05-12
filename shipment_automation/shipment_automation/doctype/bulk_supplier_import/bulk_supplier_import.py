@@ -265,6 +265,8 @@ def run_processing(docname):
                 if details:
                     msg += f" with " + ", ".join(details)
                 
+                # Commit here to ensure this record is saved before moving to the next
+                frappe.db.commit()
                 created.append(f"✅ {msg}")
             except Exception as e:
                 # If anything fails, we rollback the specific supplier creation
