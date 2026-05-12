@@ -194,7 +194,7 @@ def run_processing(docname):
             supplier = str(first_row[col_map["supplier"]]).strip()
             po_date = parse_excel_date(first_row[col_map["po_date"]])
             
-            s_details = frappe.db.get_value("Supplier", supplier, ["default_currency", "default_company"], as_dict=True)
+            s_details = frappe.db.get_value("Supplier", supplier, ["default_currency"], as_dict=True)
             
             po = frappe.new_doc("Purchase Order")
             po.name = po_id
@@ -208,8 +208,8 @@ def run_processing(docname):
 
             po.supplier = supplier
             po.transaction_date = po_date
-            po.company = s_details.default_company or frappe.db.get_single_value("Global Defaults", "default_company")
-            po.currency = s_details.default_currency or frappe.db.get_single_value("Global Defaults", "default_currency")
+            po.company = frappe.db.get_single_value("Global Defaults", "default_company")
+            po.currency = (s_details.default_currency if s_details else None) or frappe.db.get_single_value("Global Defaults", "default_currency")
             
             for row in rows:
                 qty = flt(row[col_map["quantity"]])
