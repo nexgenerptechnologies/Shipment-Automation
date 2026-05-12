@@ -27,14 +27,15 @@ class BulkBOMImport(Document):
         ws.title = "BOM Import Template"
         
         headers = [
-            "Parent Item Code", "BOM Name (Optional)", "Quantity to Manufacture", 
-            "Child Item Code", "Child Quantity", "UOM"
+            "Parent Item Code", "Item Code (Component)", "Quantity", "UOM",
+            "Is Scrap (Yes/No)", "Operation Name", "Workstation", "Operation Time (Mins)", "Rate"
         ]
         ws.append(headers)
         
-        # Add sample data for one BOM with two items
-        ws.append(["PARENT-01", "Main Assembly", "1", "RAW-001", "5", "Nos"])
-        ws.append(["PARENT-01", "", "1", "RAW-002", "2", "Nos"])
+        # Sample data based on user image
+        ws.append(["FGD00167", "RMT00059", "0.010970", "KGS", "No", "", "", "", "68.00"])
+        ws.append(["FGD00167", "SCP00006", "-0.004230", "KGS", "Yes", "", "", "", "32.00"])
+        ws.append(["FGD00167", "", "", "", "No", "Cutting & Bending", "PP45T08", "0.022222", "19.40"])
         
         file_path = get_site_path("public", "files", "Bulk_BOM_Import_Template.xlsx")
         wb.save(file_path)
@@ -56,24 +57,27 @@ def run_validation(docname):
         errors = []
         for i, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             parent = clean_val(row[0])
-            child = clean_val(row[3])
+            child = clean_val(row[1])
+            op_name = clean_val(row[5])
+            workstation = clean_val(row[6])
             
             if not parent:
                 errors.append(f"Row {i}: Parent Item Code is missing.")
             elif not frappe.db.exists("Item", parent):
                 errors.append(f"Row {i}: Parent Item '{parent}' does not exist.")
-                
-            if not child:
-                errors.append(f"Row {i}: Child Item Code is missing.")
-            elif not frappe.db.exists("Item", child):
-                errors.append(f"Row {i}: Child Item '{child}' does not exist.")
+            
+            if child and not frappe.db.exists("Item", child):
+                errors.append(f"Row {i}: Component Item '{child}' does not exist.")
+            
+            if op_name and workstation and not frappe.db.exists("Workstation", workstation):
+                errors.append(f"Row {i}: Workstation '{workstation}' does not exist.")
 
         if errors:
             doc.db_set("status", "Failed")
             doc.db_set("validation_log", "❌ Validation Errors:\n" + "\n".join(errors))
         else:
             doc.db_set("status", "Validated")
-            doc.db_set("validation_log", "✅ All items validated. Parent and Child items exist.")
+            doc.db_set("validation_log", "✅ Validation Successful.")
         frappe.db.commit()
         
     except Exception:
@@ -95,17 +99,26 @@ def run_processing(docname):
             if not parent: continue
             
             if parent not in boms:
-                boms[parent] = {
-                    "name": clean_val(row[1]) or f"BOM for {parent}",
-                    "qty": flt(row[2]) or 1.0,
-                    "items": []
-                }
+                boms[parent] = {"items": [], "operations": []}
             
-            boms[parent]["items"].append({
-                "item_code": clean_val(row[3]),
-                "qty": flt(row[4]),
-                "uom": clean_val(row[5])
-            })
+            child = clean_val(row[1])
+            if child:
+                boms[parent]["items"].append({
+                    "item_code": child,
+                    "qty": flt(row[2]),
+                    "uom": clean_val(row[3]),
+                    "is_scrap": 1 if clean_val(row[4]).lower() == "yes" else 0,
+                    "rate": flt(row[8])
+                })
+            
+            op_name = clean_val(row[5])
+            if op_name:
+                boms[parent]["operations"].append({
+                    "operation": op_name,
+                    "workstation": clean_val(row[6]),
+                    "time_in_mins": flt(row[7]) * 60, # Assuming user input is hours as per image
+                    "hour_rate": flt(row[8])
+                })
 
         summary = []
         for parent_code, data in boms.items():
@@ -113,15 +126,36 @@ def run_processing(docname):
                 # Create BOM
                 bom = frappe.new_doc("BOM")
                 bom.item = parent_code
-                bom.quantity = data["qty"]
-                bom.is_active = 1
-                bom.is_default = 1
+                bom.quantity = 1.0
+                bom.with_operations = 1 if data["operations"] else 0
                 
                 for item_data in data["items"]:
-                    bom.append("items", {
-                        "item_code": item_data["item_code"],
-                        "qty": item_data["qty"],
-                        "uom": item_data["uom"] or frappe.db.get_value("Item", item_data["item_code"], "stock_uom")
+                    if item_data["is_scrap"]:
+                        bom.append("scrap_items", {
+                            "item_code": item_data["item_code"],
+                            "stock_qty": item_data["qty"],
+                            "rate": item_data["rate"]
+                        })
+                    else:
+                        bom.append("items", {
+                            "item_code": item_data["item_code"],
+                            "qty": item_data["qty"],
+                            "uom": item_data["uom"] or frappe.db.get_value("Item", item_data["item_code"], "stock_uom"),
+                            "rate": item_data["rate"]
+                        })
+                
+                for op_data in data["operations"]:
+                    # Check if operation exists, if not create it
+                    if not frappe.db.exists("Operation", op_data["operation"]):
+                        new_op = frappe.new_doc("Operation")
+                        new_op.operation = op_data["operation"]
+                        new_op.insert(ignore_permissions=True)
+                    
+                    bom.append("operations", {
+                        "operation": op_data["operation"],
+                        "workstation": op_data["workstation"],
+                        "time_in_mins": op_data["time_in_mins"],
+                        "hour_rate": op_data["hour_rate"]
                     })
                 
                 bom.insert(ignore_permissions=True)
