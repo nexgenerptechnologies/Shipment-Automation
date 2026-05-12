@@ -160,6 +160,7 @@ def run_processing(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
         
+        any_error = False
         created = []
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue

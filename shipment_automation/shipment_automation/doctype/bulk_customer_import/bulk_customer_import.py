@@ -161,10 +161,11 @@ def run_processing(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
         
+        any_error = False
         created = []
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
-             manual_id = clean_val(row[col_map["id"]])
+            manual_id = clean_val(row[col_map["id"]])
             series = clean_val(row[col_map["series"]])
             customer_name = clean_val(row[col_map["name"]])
             group = clean_val(row[col_map["group"]])
@@ -282,7 +283,6 @@ def run_processing(docname):
         
         doc.db_set("processing_log", "SUMMARY:\n" + "\n".join(created))
         frappe.db.commit()
- frappe.db.commit()
     except Exception:
         doc.db_set("status", "Failed")
         doc.db_set("processing_log", f"❌ Error:\n{frappe.get_traceback()}")
