@@ -17,7 +17,7 @@ def download_template():
     headers = [
         "Customer ID (Leave blank for Auto)", "Naming Series", "Customer Name", 
         "Customer Group", "Territory", "GST Category", "GSTIN",
-        "Street Address", "City", "State", "Pincode", "Country",
+        "Address Line 1", "City", "State", "Pincode", "Country",
         "Contact Person Name", "Email Address", "Mobile Number"
     ]
     ws.append(headers)
@@ -73,7 +73,7 @@ def get_column_map(sheet):
         "territory": ["Territory"],
         "gst_cat": ["GST Category"],
         "gstin": ["GSTIN"],
-        "street": ["Street Address"],
+        "street": ["Address Line 1", "Street Address"],
         "city": ["City"],
         "state": ["State"],
         "pincode": ["Pincode"],
@@ -173,6 +173,9 @@ def run_processing(docname):
             gstin = str(row[col_map["gstin"]]).strip() if col_map.get("gstin") is not None and row[col_map["gstin"]] else ""
             
             try:
+                # Use a transaction block (implicitly via insert/db_insert)
+                # But we catch errors at each step and throw to prevent partial creation
+                
                 # 1. Create Customer
                 c_doc = frappe.new_doc("Customer")
                 if manual_id:
@@ -187,22 +190,31 @@ def run_processing(docname):
                 c_doc.gstin = gstin
                 c_doc.insert(ignore_permissions=True)
                 
-                # 2. Create Address
+                # 2. Create Address (Mandatory check: Line 1, State, Country)
                 street = str(row[col_map["street"]]).strip() if col_map.get("street") is not None and row[col_map["street"]] else ""
-                if street:
+                state = str(row[col_map["state"]]).strip() if col_map.get("state") is not None and row[col_map["state"]] else ""
+                country = str(row[col_map["country"]]).strip() if col_map.get("country") is not None and row[col_map["country"]] else "India"
+
+                if street or state: # If any address info is provided, enforce mandatory fields
+                    if not street or not state or not country:
+                        frappe.throw(f"Address creation failed: Address Line 1, State and Country are mandatory.")
+                        
                     addr = frappe.new_doc("Address")
                     addr.address_title = customer_name
                     addr.address_type = "Billing"
                     addr.address_line1 = street
                     addr.city = str(row[col_map["city"]]).strip() if col_map.get("city") is not None else ""
-                    addr.state = str(row[col_map["state"]]).strip() if col_map.get("state") is not None else ""
+                    addr.state = state
                     addr.pincode = str(row[col_map["pincode"]]).strip() if col_map.get("pincode") is not None else ""
-                    addr.country = str(row[col_map["country"]]).strip() if col_map.get("country") is not None else "India"
+                    addr.country = country
                     addr.append("links", {"link_doctype": "Customer", "link_name": c_doc.name})
                     addr.insert(ignore_permissions=True)
 
                 # 3. Create Contact
                 c_person = str(row[col_map["contact_name"]]).strip() if col_map.get("contact_name") is not None and row[col_map["contact_name"]] else ""
+                email = str(row[col_map["email"]]).strip() if col_map.get("email") is not None and row[col_map["email"]] else ""
+                mobile = str(row[col_map["mobile"]]).strip() if col_map.get("mobile") is not None and row[col_map["mobile"]] else ""
+
                 if c_person:
                     con = frappe.new_doc("Contact")
                     con.first_name = c_person
@@ -210,19 +222,20 @@ def run_processing(docname):
                     con.flags.ignore_permissions = True
                     con.db_insert()
                     
-                    if col_map.get("email") is not None and row[col_map["email"]]:
-                         e_row = con.append("email_ids", {"email_id": str(row[col_map["email"]]).strip(), "is_primary": 1})
+                    if email:
+                         e_row = con.append("email_ids", {"email_id": email, "is_primary": 1})
                          e_row.db_insert()
                     
-                    mobile_val = str(row[col_map["mobile"]]).strip() if col_map.get("mobile") is not None and row[col_map["mobile"]] else ""
-                    if mobile_val:
-                         p_row = con.append("phone_nos", {"phone_number": mobile_val, "is_primary": 1})
+                    if mobile:
+                         p_row = con.append("phone_nos", {"phone_number": mobile, "is_primary": 1})
                          p_row.db_insert()
                     
                     con.run_method("on_update")
 
                 created.append(f"✅ {c_doc.name}")
             except Exception as e:
+                # If anything fails, we rollback the specific customer creation
+                frappe.db.rollback()
                 created.append(f"❌ {customer_name}: {str(e)}")
 
         doc.db_set("status", "Completed")
