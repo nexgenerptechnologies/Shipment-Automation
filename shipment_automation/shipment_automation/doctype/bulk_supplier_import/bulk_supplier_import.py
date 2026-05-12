@@ -159,19 +159,12 @@ def run_processing(docname):
             manual_id = str(row[col_map["id"]]).strip() if col_map.get("id") is not None and row[col_map["id"]] else ""
             series = str(row[col_map["series"]]).strip() if col_map.get("series") is not None and row[col_map["series"]] else ""
             supplier_name = str(row[col_map["name"]]).strip()
-            group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else "All Supplier Groups"
+            group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else ""
             
-            # If the group is a 'Group' type, try to find the first child that is NOT a group
-            if frappe.db.get_value("Supplier Group", group, "is_group"):
-                child_group = frappe.db.get_value("Supplier Group", {"parent_supplier_group": group, "is_group": 0}, "name")
-                if child_group:
-                    group = child_group
-                else:
-                    # If no child found, check if 'All Supplier Groups' itself is a group (it usually is)
-                    # We default to the first available non-group Supplier Group to prevent the error
-                    fallback = frappe.db.get_value("Supplier Group", {"is_group": 0}, "name")
-                    if fallback:
-                        group = fallback
+            # Check if group is a 'Group' type (ERPNext requires a non-group child for transactions)
+            if group and frappe.db.get_value("Supplier Group", group, "is_group"):
+                created.append(f"❌ {supplier_name}: Cannot select a Group type Supplier Group ({group}). Please select a non-group Supplier Group.")
+                continue
             gst_cat = str(row[col_map["gst_cat"]]).strip() if col_map.get("gst_cat") is not None else ""
             gstin = str(row[col_map["gstin"]]).strip() if col_map.get("gstin") is not None and row[col_map["gstin"]] else ""
             

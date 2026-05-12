@@ -156,32 +156,19 @@ def run_processing(docname):
             
             manual_id = str(row[col_map["id"]]).strip() if col_map.get("id") is not None and row[col_map["id"]] else ""
             series = str(row[col_map["series"]]).strip() if col_map.get("series") is not None and row[col_map["series"]] else ""
-            customer_name = str(row[col_map["name"]]).strip()
-            group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else "All Customer Groups"
+            group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else ""
             
-            group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else "All Customer Groups"
+            # Check if group is a 'Group' type
+            if group and frappe.db.get_value("Customer Group", group, "is_group"):
+                created.append(f"❌ {customer_name}: Cannot select a Group type Customer Group ({group}). Please select a non-group Customer Group.")
+                continue
             
-            # If the group is a 'Group' type, try to find the first child that is NOT a group
-            if frappe.db.get_value("Customer Group", group, "is_group"):
-                child_group = frappe.db.get_value("Customer Group", {"parent_customer_group": group, "is_group": 0}, "name")
-                if child_group:
-                    group = child_group
-                else:
-                    fallback_g = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
-                    if fallback_g:
-                        group = fallback_g
+            territory = str(row[col_map["territory"]]).strip() if col_map.get("territory") is not None and row[col_map["territory"]] else ""
             
-            territory = str(row[col_map["territory"]]).strip() if col_map.get("territory") is not None and row[col_map["territory"]] else "All Territories"
-            
-            # If the territory is a 'Group' type, try to find the first child that is NOT a group
-            if frappe.db.get_value("Territory", territory, "is_group"):
-                child_terr = frappe.db.get_value("Territory", {"parent_territory": territory, "is_group": 0}, "name")
-                if child_terr:
-                    territory = child_terr
-                else:
-                    fallback_t = frappe.db.get_value("Territory", {"is_group": 0}, "name")
-                    if fallback_t:
-                        territory = fallback_t
+            # Check if territory is a 'Group' type
+            if territory and frappe.db.get_value("Territory", territory, "is_group"):
+                created.append(f"❌ {customer_name}: Cannot select a Group type Territory ({territory}). Please select a non-group Territory.")
+                continue
             gst_cat = str(row[col_map["gst_cat"]]).strip() if col_map.get("gst_cat") is not None else ""
             gstin = str(row[col_map["gstin"]]).strip() if col_map.get("gstin") is not None and row[col_map["gstin"]] else ""
             
