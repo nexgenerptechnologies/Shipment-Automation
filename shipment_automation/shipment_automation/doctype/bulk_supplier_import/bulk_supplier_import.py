@@ -161,10 +161,17 @@ def run_processing(docname):
             supplier_name = str(row[col_map["name"]]).strip()
             group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else "All Supplier Groups"
             
-            # Check if group is a 'Group' type
+            # If the group is a 'Group' type, try to find the first child that is NOT a group
             if frappe.db.get_value("Supplier Group", group, "is_group"):
-                created.append(f"❌ {supplier_name}: Cannot select a Group type Supplier Group ({group}). Please select a non-group Supplier Group.")
-                continue
+                child_group = frappe.db.get_value("Supplier Group", {"parent_supplier_group": group, "is_group": 0}, "name")
+                if child_group:
+                    group = child_group
+                else:
+                    # If no child found, check if 'All Supplier Groups' itself is a group (it usually is)
+                    # We default to the first available non-group Supplier Group to prevent the error
+                    fallback = frappe.db.get_value("Supplier Group", {"is_group": 0}, "name")
+                    if fallback:
+                        group = fallback
             gst_cat = str(row[col_map["gst_cat"]]).strip() if col_map.get("gst_cat") is not None else ""
             gstin = str(row[col_map["gstin"]]).strip() if col_map.get("gstin") is not None and row[col_map["gstin"]] else ""
             
