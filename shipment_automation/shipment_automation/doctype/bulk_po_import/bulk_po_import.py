@@ -114,7 +114,7 @@ def parse_excel_date(date_val):
 def run_validation(docname):
     doc = frappe.get_doc("Bulk PO Import", docname)
     try:
-        file_doc = frappe.get_doc("File", {"file_url": doc.excel_file})
+        file_doc = frappe.get_doc("File", {"file_url": doc.po_excel})
         wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
         sheet = wb.active
         col_map = get_column_map(sheet)
@@ -172,7 +172,7 @@ def run_validation(docname):
 def run_processing(docname):
     doc = frappe.get_doc("Bulk PO Import", docname)
     try:
-        file_doc = frappe.get_doc("File", {"file_url": doc.excel_file})
+        file_doc = frappe.get_doc("File", {"file_url": doc.po_excel})
         wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
         sheet = wb.active
         col_map = get_column_map(sheet)
