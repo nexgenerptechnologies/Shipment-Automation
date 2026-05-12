@@ -1,2 +1,1 @@
-# shipment_automation module
-from . import doctype
+__version__ = "0.0.2"
