@@ -50,7 +50,7 @@ class BulkPOImport(Document):
         if self.status != "Validated":
             frappe.throw("Please validate the data first.")
         self.db_set("status", "Processing")
-        self.db_set("po_log", "⏳ Creating Purchase Orders. Please refresh in a few seconds.")
+        self.db_set("processing_log", "⏳ Creating Purchase Orders. Please refresh in a few seconds.")
         frappe.db.commit()
         frappe.enqueue(
             "shipment_automation.shipment_automation.doctype.bulk_po_import.bulk_po_import.run_processing",
@@ -242,9 +242,9 @@ def run_processing(docname):
             created_pos.append(po.name)
 
         doc.db_set("status", "Completed")
-        doc.db_set("po_log", "SUMMARY:\n" + "\n".join([f"✅ {name}" for name in created_pos]))
+        doc.db_set("processing_log", "SUMMARY:\n" + "\n".join([f"✅ {name}" for name in created_pos]))
         frappe.db.commit()
     except Exception:
         doc.db_set("status", "Failed")
-        doc.db_set("po_log", f"❌ Error:\n{frappe.get_traceback()}")
+        doc.db_set("processing_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()

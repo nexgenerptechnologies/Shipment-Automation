@@ -36,9 +36,15 @@
    "label": "Log"
   },
   {
-   "fieldname": "creation_log",
+   "fieldname": "validation_log",
    "fieldtype": "Long Text",
-   "label": "Creation Log",
+   "label": "Validation Log",
+   "read_only": 1
+  },
+  {
+   "fieldname": "processing_log",
+   "fieldtype": "Long Text",
+   "label": "Processing Log",
    "read_only": 1
   }
  ],
