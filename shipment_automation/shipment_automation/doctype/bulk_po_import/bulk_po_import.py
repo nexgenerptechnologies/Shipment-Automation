@@ -15,7 +15,7 @@ def download_template():
     
     headers = [
         "PO Number", "PO Date", "Supplier Name", "Item Code", "Item Name", 
-        "Description", "Quantity", "Rate", "Required By Date", "Line Number"
+        "Description", "Quantity", "Rate", "Required By", "Line Number"
     ]
     ws.append(headers)
     
@@ -71,7 +71,7 @@ def get_column_map(sheet):
         "description": ["Description"],
         "quantity": ["Quantity", "Qty"],
         "rate": ["Rate"],
-        "req_date": ["Required By Date", "Target Date"],
+        "req_date": ["Required By", "Required By Date", "Target Date"],
         "line_number": ["Line Number", "Line #"]
     }
     for idx, cell in enumerate(header_row):
