@@ -221,10 +221,14 @@ def run_processing(docname):
                 item = po.append("items", {
                     "item_code": str(row[col_map["item_code"]]).strip(),
                     "qty": qty,
-                    "rate": rate,
-                    "schedule_date": req_date or po_date
+                    "rate": rate
                 })
+                # Set missing values first to get defaults
                 item.run_method("set_missing_values")
+                
+                # THEN strictly set the schedule_date from Excel
+                final_req_date = req_date or po_date
+                item.schedule_date = final_req_date
                 
                 l_field = "line_number"
                 if not hasattr(item, "line_number") and hasattr(item, "custom_line_number"):
