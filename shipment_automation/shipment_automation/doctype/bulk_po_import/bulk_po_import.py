@@ -240,9 +240,10 @@ def run_processing(docname):
                 po.run_method("calculate_taxes_and_totals")
                 
                 po.flags.ignore_permissions = True
-                po.insert()
-                # If you want them submitted automatically:
-                # po.submit()
+                # Force the name from Excel
+                po.insert(set_name=po_id)
+                # Ensure it's saved and visible immediately
+                frappe.db.commit()
                 
                 created_pos.append(po.name)
             except Exception as e:
