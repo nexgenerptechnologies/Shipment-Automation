@@ -185,6 +185,7 @@ def run_processing(docname):
                 po_groups[po_id] = []
             po_groups[po_id].append(row)
 
+        error_summary = []
         created_pos = []
         for po_id, rows in po_groups.items():
             if frappe.db.exists("Purchase Order", po_id):
@@ -230,21 +231,42 @@ def run_processing(docname):
                     l_field = "custom_line_number"
                 if line_val: setattr(item, l_field, line_val)
 
-            po.run_method("set_missing_values")
-            po.run_method("calculate_taxes_and_totals")
-            
-            po.flags.ignore_permissions = True
-            po.db_insert()
-            for child in po.get_all_children():
-                child.db_insert()
-            po.run_method("on_update")
-            
-            created_pos.append(po.name)
+            try:
+                po.run_method("set_missing_values")
+                po.run_method("calculate_taxes_and_totals")
+                
+                po.flags.ignore_permissions = True
+                po.db_insert()
+                for child in po.get_all_children():
+                    child.db_insert()
+                po.run_method("on_update")
+                
+                created_pos.append(po.name)
+            except Exception as e:
+                frappe.db.rollback()
+                # Catch specific Frappe messages to show them cleanly
+                msg = str(e)
+                if hasattr(e, 'message'):
+                    msg = e.message
+                elif isinstance(e, frappe.exceptions.ValidationError):
+                    # Usually the message is in the first argument
+                    if e.args: msg = e.args[0]
+                
+                # Strip HTML if present
+                from frappe.utils import strip_html
+                msg = strip_html(str(msg))
+                
+                error_summary.append(f"❌ {po_id}: {msg}")
 
-        doc.db_set("status", "Completed")
-        doc.db_set("processing_log", "SUMMARY:\n" + "\n".join([f"✅ {name}" for name in created_pos]))
+        status = "Completed" if not error_summary else "Failed"
+        summary_text = "SUMMARY:\n" + "\n".join([f"✅ {name}" for name in created_pos])
+        if error_summary:
+            summary_text += "\n\nERRORS:\n" + "\n".join(error_summary)
+            
+        doc.db_set("status", status)
+        doc.db_set("processing_log", summary_text)
         frappe.db.commit()
-    except Exception:
+    except Exception as e:
         doc.db_set("status", "Failed")
-        doc.db_set("processing_log", f"❌ Error:\n{frappe.get_traceback()}")
+        doc.db_set("processing_log", f"❌ Critical Error:\n{str(e)}")
         frappe.db.commit()
