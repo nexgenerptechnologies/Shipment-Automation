@@ -240,10 +240,9 @@ def run_processing(docname):
                 po.run_method("calculate_taxes_and_totals")
                 
                 po.flags.ignore_permissions = True
-                po.db_insert()
-                for child in po.get_all_children():
-                    child.db_insert()
-                po.run_method("on_update")
+                po.insert()
+                # If you want them submitted automatically:
+                # po.submit()
                 
                 created_pos.append(po.name)
             except Exception as e:
