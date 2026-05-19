@@ -196,9 +196,19 @@ def run_processing(docname):
                 # so.submit() # Optional: Typically SO is kept in Draft for review
                 created.append(f"✅ {so.name}")
             except Exception as e:
-                created.append(f"❌ Error creating SO: {str(e)}")
+                frappe.db.rollback()
+                msg = str(e)
+                if hasattr(e, 'message'):
+                    msg = e.message
+                elif hasattr(e, 'args') and e.args:
+                    msg = e.args[0]
+                
+                from frappe.utils import strip_html
+                msg = strip_html(str(msg))
+                created.append(f"❌ Error creating SO: {msg}")
 
-        doc.db_set("status", "Completed")
+        status = "Completed" if not any("❌" in log for log in created) else "Failed"
+        doc.db_set("status", status)
         doc.db_set("so_log", "SUMMARY:\n" + "\n".join(created))
         frappe.db.commit()
     except Exception:
