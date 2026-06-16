@@ -111,8 +111,12 @@ def run_validation(docname):
             
             posting_date = parse_excel_date(row[col_map["posting_date"]])
 
-            if not customer or not frappe.db.exists("Customer", customer):
-                row_errors.append(f"Customer '{customer}' not found.")
+            if customer:
+                customer_id = frappe.db.get_value("Customer", {"customer_name": customer}, "name")
+                if not customer_id and not frappe.db.exists("Customer", customer):
+                    row_errors.append(f"Customer \x27{customer}\x27 not found.")
+            else:
+                row_errors.append("Customer is mandatory.")
             
             if so_num and not frappe.db.exists("Sales Order", so_num):
                 row_errors.append(f"Sales Order '{so_num}' not found.")
@@ -176,7 +180,9 @@ def run_processing(docname):
         for key, rows in dn_groups.items():
             try:
                 first = rows[0]
-                customer = str(first[col_map["customer"]]).strip()
+                customer_val = str(first[col_map["customer"]]).strip()
+                customer = frappe.db.get_value("Customer", {"customer_name": customer_val}, "name")
+                if not customer: customer = customer_val
                 dn_id = str(first[col_map["dn_num"]]).strip() if col_map.get("dn_num") is not None and first[col_map["dn_num"]] else ""
                 posting_date = parse_excel_date(first[col_map["posting_date"]]) or nowdate()
                 
@@ -226,3 +232,4 @@ def run_processing(docname):
         doc.db_set("status", "Failed")
         doc.db_set("dn_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
+

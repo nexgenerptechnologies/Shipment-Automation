@@ -166,7 +166,9 @@ def run_validation(docname):
             
             pr_num = str(row[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and row[col_map["pr_num"]] else ""
             raw_pr_date = row[col_map["pr_date"]] if col_map.get("pr_date") is not None else None
-            supplier_name = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else ""
+            supplier_val = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else ""
+            supplier_name = frappe.db.get_value("Supplier", {"supplier_name": supplier_val}, "name")
+            if not supplier_name: supplier_name = supplier_val
             po_num = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None else ""
             item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None else ""
             item_name = str(row[col_map["item_name"]]).strip() if col_map.get("item_name") is not None else ""
@@ -263,7 +265,9 @@ def run_processing(docname):
             if not any(row): continue
             pr_id = str(row[col_map["pr_num"]]).strip()
             pr_date = parse_excel_date(row[col_map["pr_date"]]) or "no-date"
-            supplier = str(row[col_map["supplier"]]).strip()
+            supplier_val = str(row[col_map["supplier"]]).strip()
+            supplier = frappe.db.get_value("Supplier", {"supplier_name": supplier_val}, "name")
+            if not supplier: supplier = supplier_val
             
             group_key = (pr_id, pr_date, supplier)
             if group_key not in pr_groups: pr_groups[group_key] = []
@@ -337,3 +341,4 @@ def run_processing(docname):
         doc.db_set("status", "Failed")
         doc.db_set("receipts_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
+

@@ -138,6 +138,8 @@ def run_validation(docname):
             if not po_num: errors.append(f"Row {row_idx}: PO Number missing.")
             if not po_date: errors.append(f"Row {row_idx}: PO Date missing.")
             if not supplier: errors.append(f"Row {row_idx}: Supplier missing.")
+            elif not frappe.db.get_value("Supplier", {"supplier_name": supplier}, "name") and not frappe.db.exists("Supplier", supplier):
+                errors.append(f"Row {row_idx}: Supplier \x27{supplier}\x27 not found in system.")
             
             if po_date and (getdate(po_date).year < 2000 or getdate(po_date).year > 2100):
                 errors.append(f"Row {row_idx}: Invalid PO Date (Must be 2000-2100).")
@@ -192,7 +194,13 @@ def run_processing(docname):
                 continue
 
             first_row = rows[0]
-            supplier = str(first_row[col_map["supplier"]]).strip()
+            supplier_val = str(first_row[col_map["supplier"]]).strip()
+            
+            # Lookup supplier ID by name, fallback to ID if they provided ID directly
+            supplier = frappe.db.get_value("Supplier", {"supplier_name": supplier_val}, "name")
+            if not supplier:
+                supplier = supplier_val
+                
             po_date = parse_excel_date(first_row[col_map["po_date"]])
             
             s_details = frappe.db.get_value("Supplier", supplier, ["default_currency"], as_dict=True)
@@ -274,3 +282,4 @@ def run_processing(docname):
         doc.db_set("status", "Failed")
         doc.db_set("processing_log", f"❌ Critical Error:\n{str(e)}")
         frappe.db.commit()
+

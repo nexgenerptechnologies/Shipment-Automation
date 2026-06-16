@@ -153,7 +153,9 @@ def run_validation(docname):
             
             pr_id = str(row[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and row[col_map["pr_num"]] else ""
             po_num = str(row[col_map["po_num"]]).strip() if col_map.get("po_num") is not None and row[col_map["po_num"]] else ""
-            supplier_name = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else ""
+            supplier_val = str(row[col_map["supplier"]]).strip() if col_map.get("supplier") is not None else ""
+            supplier_name = frappe.db.get_value("Supplier", {"supplier_name": supplier_val}, "name")
+            if not supplier_name: supplier_name = supplier_val
             item_code = str(row[col_map["item_code"]]).strip() if col_map.get("item_code") is not None else ""
             item_name = str(row[col_map["item_name"]]).strip() if col_map.get("item_name") is not None else ""
             description = str(row[col_map["description"]]).strip() if col_map.get("description") is not None else ""
@@ -250,7 +252,9 @@ def run_processing(docname):
                 first = rows[0]
                 pr_id = str(first[col_map["pr_num"]]).strip() if col_map.get("pr_num") is not None and first[col_map["pr_num"]] else ""
                 po_num = str(first[col_map["po_num"]]).strip() if col_map.get("po_num") is not None and first[col_map["po_num"]] else ""
-                supplier = str(first[col_map["supplier"]]).strip()
+                supplier_val = str(first[col_map["supplier"]]).strip()
+                supplier = frappe.db.get_value("Supplier", {"supplier_name": supplier_val}, "name")
+                if not supplier: supplier = supplier_val
                 pi_post_date = parse_excel_date(first[col_map["pi_post_date"]])
                 pi_date = parse_excel_date(first[col_map["pi_date"]])
                 boe_id = str(first[col_map["boe_num"]]).strip() if col_map.get("boe_num") is not None and first[col_map["boe_num"]] else ""
@@ -333,3 +337,4 @@ def run_processing(docname):
         doc.db_set("status", "Failed")
         doc.db_set("processing_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
+
