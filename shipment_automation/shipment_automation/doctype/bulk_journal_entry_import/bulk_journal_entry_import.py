@@ -1,21 +1,23 @@
 import frappe
 from frappe.model.document import Document
-from frappe.utils import flt, nowdate, getdate, strip_html
+from frappe.utils import flt, getdate, nowdate
 import openpyxl
 from io import BytesIO
-from shipment_automation.shipment_automation.utils import parse_excel_date
+import datetime
+
 
 @frappe.whitelist()
 def download_template():
-    """Generates and downloads the Bulk Journal Entry Import Excel template."""
+    """Generates and downloads the Bulk JE Import Excel template."""
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Bulk Journal Entry Import"
+    ws.title = "Bulk JE Import Template"
     
     headers = [
-        "Voucher ID (Link rows)", "Voucher Type", "Posting Date", 
-        "Account", "Party Type (Optional)", "Party (Optional)", 
-        "Debit", "Credit", "Bill No", "Bill Date", "Due Date", "User Remark"
+        "Entry Type", "Posting Date", "Account (Accounting Entries)", 
+        "Party (Accounting Entries)", "Party Type (Accounting Entries)", 
+        "Debit (Accounting Entries)", "Credit (Accounting Entries)", 
+        "Bill No", "Bill Date", "Due Date", "User Remark"
     ]
     ws.append(headers)
     
@@ -31,7 +33,9 @@ def download_template():
     frappe.response['filecontent'] = output.getvalue()
     frappe.response['type'] = 'binary'
 
+
 class BulkJournalEntryImport(Document):
+
     @frappe.whitelist()
     def start_validation(self):
         self.db_set("status", "Validating")
@@ -61,14 +65,13 @@ def get_column_map(sheet):
     header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
     mapping = {}
     expected = {
-        "v_id": ["Voucher ID (Link rows)", "Voucher ID"],
-        "v_type": ["Voucher Type"],
+        "v_type": ["Entry Type", "Voucher Type"],
         "posting_date": ["Posting Date"],
-        "account": ["Account"],
-        "party_type": ["Party Type (Optional)", "Party Type"],
-        "party": ["Party (Optional)", "Party"],
-        "debit": ["Debit"],
-        "credit": ["Credit"],
+        "account": ["Account (Accounting Entries)", "Account"],
+        "party": ["Party (Accounting Entries)", "Party", "Party (Optional)"],
+        "party_type": ["Party Type (Accounting Entries)", "Party Type", "Party Type (Optional)"],
+        "debit": ["Debit (Accounting Entries)", "Debit"],
+        "credit": ["Credit (Accounting Entries)", "Credit"],
         "bill_no": ["Bill No"],
         "bill_date": ["Bill Date"],
         "due_date": ["Due Date"],
@@ -81,6 +84,36 @@ def get_column_map(sheet):
             if any(alias.lower() == clean for alias in aliases):
                 mapping[key] = idx
     return mapping
+
+
+def parse_excel_date(date_val):
+    if not date_val:
+        return None
+    if isinstance(date_val, (datetime.datetime, datetime.date)):
+        return date_val.strftime("%Y-%m-%d")
+    if isinstance(date_val, str):
+        date_str = date_val.strip()
+        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d"]:
+            try:
+                dt = datetime.datetime.strptime(date_str, fmt)
+                return dt.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    try:
+        res = getdate(date_val)
+        return res.strftime("%Y-%m-%d") if res else None
+    except:
+        return None
+
+
+def resolve_party_id(party_type, party_name):
+    if not party_type or not party_name:
+        return party_name
+    party_field = frappe.scrub(party_type) + "_name"
+    party_id = frappe.db.get_value(party_type, {party_field: party_name}, "name")
+    if not party_id:
+        party_id = frappe.db.get_value(party_type, {"name": party_name}, "name")
+    return party_id or party_name
 
 
 def run_validation(docname):
@@ -98,21 +131,27 @@ def run_validation(docname):
             if not any(row): continue
             
             row_errors = []
-            v_id = str(row[col_map["v_id"]]).strip() if col_map.get("v_id") is not None and row[col_map["v_id"]] else "SINGLE"
             v_type = str(row[col_map["v_type"]]).strip() if col_map.get("v_type") is not None else ""
             account = str(row[col_map["account"]]).strip() if col_map.get("account") is not None else ""
             p_type = str(row[col_map["party_type"]]).strip() if col_map.get("party_type") is not None and row[col_map["party_type"]] else ""
-            party = str(row[col_map["party"]]).strip() if col_map.get("party") is not None and row[col_map["party"]] else ""
-            debit = flt(row[col_map["debit"]])
-            credit = flt(row[col_map["credit"]])
+            party_val = str(row[col_map["party"]]).strip() if col_map.get("party") is not None and row[col_map["party"]] else ""
+            
+            party = resolve_party_id(p_type, party_val) if p_type and party_val else ""
+            
+            debit = flt(row[col_map["debit"]]) if col_map.get("debit") is not None else 0.0
+            credit = flt(row[col_map["credit"]]) if col_map.get("credit") is not None else 0.0
             
             bill_no = str(row[col_map["bill_no"]]).strip() if col_map.get("bill_no") is not None and row[col_map["bill_no"]] else ""
             bill_date = row[col_map["bill_date"]] if col_map.get("bill_date") is not None else None
             due_date = row[col_map["due_date"]] if col_map.get("due_date") is not None else None
+            remark = str(row[col_map["remark"]]).strip() if col_map.get("remark") is not None and row[col_map["remark"]] else ""
             
             posting_date = parse_excel_date(row[col_map["posting_date"]])
 
-            if not v_type: row_errors.append("Voucher Type is mandatory.")
+            # Auto Grouping by (Entry Type, Posting Date, User Remark)
+            v_id = f"{v_type}_{posting_date}_{remark}"
+
+            if not v_type: row_errors.append("Entry Type is mandatory.")
             if not account or not frappe.db.exists("Account", account):
                 row_errors.append(f"Account '{account}' not found.")
             else:
@@ -121,9 +160,9 @@ def run_validation(docname):
                 if bill_no and not is_party_acc:
                     row_errors.append(f"Bill No '{bill_no}' cannot be used on standard account '{account}'. It requires a Payable/Receivable account.")
 
-            if p_type and party:
+            if p_type and party_val:
                 if not frappe.db.exists(p_type, party):
-                    row_errors.append(f"Party '{party}' of type '{p_type}' not found.")
+                    row_errors.append(f"Party '{party_val}' of type '{p_type}' not found.")
             
             if not posting_date:
                 row_errors.append("Invalid Posting Date (Use DD/MM/YYYY).")
@@ -142,25 +181,25 @@ def run_validation(docname):
                 errors.append(f"Row {row_idx} ❌ " + " | ".join(row_errors))
             
             # Sum debits/credits per voucher to check balance later
-            if v_id not in voucher_groups: voucher_groups[v_id] = {"d": 0, "c": 0}
+            if v_id not in voucher_groups: voucher_groups[v_id] = {"d": 0, "c": 0, "display": f"{v_type} on {posting_date}"}
             voucher_groups[v_id]["d"] += debit
             voucher_groups[v_id]["c"] += credit
 
         # Final Balance Check
         for vid, sums in voucher_groups.items():
             if abs(sums["d"] - sums["c"]) > 0.01:
-                errors.append(f"Voucher ID '{vid}' ❌ Out of balance! Total Debit: {sums['d']} | Total Credit: {sums['c']}")
+                errors.append(f"Grouping '{sums['display']}' ❌ Out of balance! Total Debit: {sums['d']} | Total Credit: {sums['c']}")
 
         if not errors:
             doc.db_set("status", "Validated")
-            doc.db_set("validation_log", f"✅ All vouchers are balanced and validated.")
+            doc.db_set("validation_log", f"✅ All entries are balanced and validated.")
         else:
             doc.db_set("status", "Failed")
-            doc.db_set("validation_log", "❌ Issues found:\n\n" + "\n".join(errors))
+            doc.db_set("validation_log", "❌ Issues found:\\n\\n" + "\\n".join(errors))
         frappe.db.commit()
     except Exception:
         doc.db_set("status", "Failed")
-        doc.db_set("validation_log", f"❌ Error:\n{frappe.get_traceback()}")
+        doc.db_set("validation_log", f"❌ Error:\\n{frappe.get_traceback()}")
         frappe.db.commit()
 
 
@@ -172,11 +211,15 @@ def run_processing(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
         
-        # Group by Voucher ID
+        # Auto Grouping
         groups = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
-            v_id = str(row[col_map["v_id"]]).strip() if col_map.get("v_id") is not None and row[col_map["v_id"]] else "SINGLE"
+            v_type = str(row[col_map["v_type"]]).strip() if col_map.get("v_type") is not None else ""
+            remark = str(row[col_map["remark"]]).strip() if col_map.get("remark") is not None and row[col_map["remark"]] else ""
+            posting_date = parse_excel_date(row[col_map["posting_date"]])
+            v_id = f"{v_type}_{posting_date}_{remark}"
+            
             if v_id not in groups: groups[v_id] = []
             groups[v_id].append(row)
 
@@ -187,23 +230,27 @@ def run_processing(docname):
                 je = frappe.new_doc("Journal Entry")
                 je.voucher_type = str(first[col_map["v_type"]]).strip()
                 je.posting_date = parse_excel_date(first[col_map["posting_date"]])
-                je.user_remark = str(first[col_map["remark"]]).strip() if col_map.get("remark") is not None and str(first[col_map["remark"]]).strip() else f"Bulk Import {v_id}"
+                remark_val = str(first[col_map["remark"]]).strip() if col_map.get("remark") is not None and str(first[col_map["remark"]]).strip() else f"Bulk Import {je.voucher_type}"
+                je.user_remark = remark_val
                 
                 for r in rows:
+                    p_type = str(r[col_map["party_type"]]).strip() if col_map.get("party_type") is not None and r[col_map["party_type"]] else None
+                    party_val = str(r[col_map["party"]]).strip() if col_map.get("party") is not None and r[col_map["party"]] else None
+                    party = resolve_party_id(p_type, party_val) if p_type and party_val else None
+                    
                     acc_row = {
                         "account": str(r[col_map["account"]]).strip(),
-                        "party_type": str(r[col_map["party_type"]]).strip() if col_map.get("party_type") is not None and r[col_map["party_type"]] else None,
-                        "party": str(r[col_map["party"]]).strip() if col_map.get("party") is not None and r[col_map["party"]] else None,
-                        "debit_in_account_currency": flt(r[col_map["debit"]]),
-                        "credit_in_account_currency": flt(r[col_map["credit"]])
+                        "party_type": p_type,
+                        "party": party,
+                        "debit_in_account_currency": flt(r[col_map["debit"]]) if col_map.get("debit") is not None else 0.0,
+                        "credit_in_account_currency": flt(r[col_map["credit"]]) if col_map.get("credit") is not None else 0.0
                     }
                     
                     bill_no = str(r[col_map["bill_no"]]).strip() if col_map.get("bill_no") is not None and r[col_map["bill_no"]] else ""
                     if bill_no:
-                        acc_row["reference_type"] = "Purchase Invoice" if flt(r[col_map["credit"]]) > 0 else "Sales Invoice" 
+                        credit_val = flt(r[col_map["credit"]]) if col_map.get("credit") is not None else 0.0
+                        acc_row["reference_type"] = "Purchase Invoice" if credit_val > 0 else "Sales Invoice" 
                         acc_row["reference_name"] = bill_no
-                        
-                        # In case the user specifically mapped bill_no directly
                         acc_row["bill_no"] = bill_no
                         
                     bill_date = r[col_map["bill_date"]] if col_map.get("bill_date") is not None else None
@@ -224,20 +271,20 @@ def run_processing(docname):
 
                 je.flags.ignore_permissions = True
                 je.insert()
-                # je.submit() # Keep in Draft for accountant review
                 created.append(f"✅ {je.name}")
             except Exception as e:
                 msg = str(e)
                 if hasattr(e, 'message'): msg = e.message
                 elif hasattr(e, 'args') and e.args: msg = e.args[0]
+                from frappe.utils import strip_html
                 msg = strip_html(str(msg))
-                created.append(f"❌ Voucher '{v_id}': {msg}")
+                created.append(f"❌ {je.voucher_type} on {je.posting_date}: {msg}")
 
         status = "Completed" if not any("❌" in log for log in created) else "Failed"
         doc.db_set("status", status)
-        doc.db_set("je_log", "SUMMARY:\n" + "\n".join(created))
+        doc.db_set("je_log", "SUMMARY:\\n" + "\\n".join(created))
         frappe.db.commit()
     except Exception as e:
         doc.db_set("status", "Failed")
-        doc.db_set("je_log", f"❌ Critical Error:\n{str(e)}")
+        doc.db_set("je_log", f"❌ Critical Error:\\n{str(e)}")
         frappe.db.commit()
