@@ -20,8 +20,7 @@ def download_template():
     ws.title = "Bulk Customer Import"
     
     headers = [
-        "Customer ID (Leave blank for Auto)", "Naming Series", "Customer Name", 
-        "Customer Group", "Territory", "GST Category", "GSTIN",
+        "Customer ID (Leave blank for Auto)", "Naming Series", "Customer Name",         "Customer Type", "Territory", "GST Category", "GSTIN",
         "Address Line 1", "City", "State", "Pincode", "Country",
         "Contact Person Name", "Email Address", "Mobile Number"
     ]
@@ -74,7 +73,7 @@ def get_column_map(sheet):
         "id": ["Customer ID (Leave blank for Auto)", "Customer ID"],
         "series": ["Naming Series"],
         "name": ["Customer Name"],
-        "group": ["Customer Group"],
+        "group": ["Customer Type", "Customer Group"],
         "territory": ["Territory"],
         "gst_cat": ["GST Category"],
         "gstin": ["GSTIN"],
@@ -246,6 +245,8 @@ def run_processing(docname):
                     
                     addr.pincode = pincode
                     addr.country = country
+                    addr.gstin = gstin
+                    addr.gst_category = gst_cat
                     addr.append("links", {"link_doctype": "Customer", "link_name": c_doc.name})
                     addr.insert(ignore_permissions=True)
 
@@ -301,3 +302,7 @@ def run_processing(docname):
         doc.db_set("status", "Failed")
         doc.db_set("processing_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
+
+
+
+

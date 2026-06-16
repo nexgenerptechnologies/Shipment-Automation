@@ -20,8 +20,7 @@ def download_template():
     ws.title = "Bulk Supplier Import"
     
     headers = [
-        "Supplier ID (Leave blank for Auto)", "Naming Series", "Supplier Name", 
-        "Supplier Group", "GST Category", "GSTIN",
+        "Supplier ID (Leave blank for Auto)", "Naming Series", "Supplier Name",         "Supplier Type", "GST Category", "GSTIN",
         "Address Line 1", "City", "State", "Pincode", "Country",
         "Contact Person Name", "Email Address", "Mobile Number"
     ]
@@ -74,7 +73,7 @@ def get_column_map(sheet):
         "id": ["Supplier ID (Leave blank for Auto)", "Supplier ID"],
         "series": ["Naming Series"],
         "name": ["Supplier Name"],
-        "group": ["Supplier Group"],
+        "group": ["Supplier Type", "Supplier Group"],
         "gst_cat": ["GST Category"],
         "gstin": ["GSTIN"],
         "street": ["Address Line 1", "Street Address"],
@@ -240,6 +239,8 @@ def run_processing(docname):
                     
                     addr.pincode = pincode
                     addr.country = country
+                    addr.gstin = gstin
+                    addr.gst_category = gst_cat
                     addr.append("links", {"link_doctype": "Supplier", "link_name": s_doc.name})
                     addr.insert(ignore_permissions=True)
 
@@ -295,3 +296,7 @@ def run_processing(docname):
         doc.db_set("status", "Failed")
         doc.db_set("processing_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
+
+
+
+
