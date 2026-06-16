@@ -73,7 +73,7 @@ def get_column_map(sheet):
         "id": ["Supplier ID (Leave blank for Auto)", "Supplier ID"],
         "series": ["Naming Series"],
         "name": ["Supplier Name"],
-        "group": ["Supplier Type", "Supplier Group"],
+        "supp_type": ["Supplier Type", "Supplier Group"],
         "gst_cat": ["GST Category"],
         "gstin": ["GSTIN"],
         "street": ["Address Line 1", "Street Address"],
@@ -111,15 +111,15 @@ def run_validation(docname):
             row_errors = []
             manual_id = str(row[col_map["id"]]).strip() if col_map.get("id") is not None and row[col_map["id"]] else ""
             supplier_name = str(row[col_map["name"]]).strip() if col_map.get("name") is not None else ""
-            group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else ""
+            supp_type = str(row[col_map["supp_type"]]).strip() if col_map.get("supp_type") is not None and row[col_map["supp_type"]] else ""
             gstin = str(row[col_map["gstin"]]).strip() if col_map.get("gstin") is not None and row[col_map["gstin"]] else ""
             gst_cat = str(row[col_map["gst_cat"]]).strip() if col_map.get("gst_cat") is not None else ""
 
             if not supplier_name:
                 row_errors.append("Supplier Name is mandatory.")
 
-            if group and not frappe.db.exists("Supplier Group", group):
-                row_errors.append(f"Supplier Type '{group}' not found.")
+            if supp_type and supp_type not in frappe.get_meta("Supplier").get_field("supplier_type").options.split("\n"):
+                row_errors.append(f"Invalid Supplier Type '{supp_type}'. Must be a valid dropdown option.")
 
             # Check Duplicates
             if manual_id and frappe.db.exists("Supplier", manual_id):
@@ -168,13 +168,8 @@ def run_processing(docname):
             manual_id = clean_val(row[col_map["id"]])
             series = clean_val(row[col_map["series"]])
             supplier_name = clean_val(row[col_map["name"]])
-            group = clean_val(row[col_map["group"]])
+            supp_type = clean_val(row[col_map["supp_type"]])
             
-            # Check if group is a 'Group' type (ERPNext requires a non-group child for transactions)
-            if group and frappe.db.get_value("Supplier Group", group, "is_group"):
-                created.append(f"❌ {supplier_name}: Cannot select a Group type Supplier Type ({group}). Please select a non-group Supplier Type.")
-                any_error = True
-                continue
             gst_cat = clean_val(row[col_map["gst_cat"]])
             gstin = clean_val(row[col_map["gstin"]])
             
@@ -193,7 +188,7 @@ def run_processing(docname):
                     s_doc.naming_series = series
                 
                 s_doc.supplier_name = supplier_name
-                s_doc.supplier_group = group
+                s_doc.supplier_type = supp_type
                 
                 # Auto-set GST Category if GSTIN is present
                 if gstin and (not gst_cat or gst_cat.lower() == "none"):
@@ -296,6 +291,10 @@ def run_processing(docname):
         doc.db_set("status", "Failed")
         doc.db_set("processing_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
+
+
+
+
 
 
 
