@@ -119,7 +119,7 @@ def run_validation(docname):
                 row_errors.append("Supplier Name is mandatory.")
 
             if group and not frappe.db.exists("Supplier Group", group):
-                row_errors.append(f"Supplier Group '{group}' not found.")
+                row_errors.append(f"Supplier Type '{group}' not found.")
 
             # Check Duplicates
             if manual_id and frappe.db.exists("Supplier", manual_id):
@@ -172,7 +172,7 @@ def run_processing(docname):
             
             # Check if group is a 'Group' type (ERPNext requires a non-group child for transactions)
             if group and frappe.db.get_value("Supplier Group", group, "is_group"):
-                created.append(f"❌ {supplier_name}: Cannot select a Group type Supplier Group ({group}). Please select a non-group Supplier Group.")
+                created.append(f"❌ {supplier_name}: Cannot select a Group type Supplier Type ({group}). Please select a non-group Supplier Type.")
                 any_error = True
                 continue
             gst_cat = clean_val(row[col_map["gst_cat"]])
@@ -296,6 +296,7 @@ def run_processing(docname):
         doc.db_set("status", "Failed")
         doc.db_set("processing_log", f"❌ Error:\n{frappe.get_traceback()}")
         frappe.db.commit()
+
 
 
 
