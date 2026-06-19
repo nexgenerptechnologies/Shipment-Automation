@@ -8,17 +8,15 @@ import datetime
 
 @frappe.whitelist()
 def download_template():
-    """Generates and downloads the Bulk Purchase Invoice & BOE Import Excel template."""
+    """Generates and downloads the Bulk Purchase Invoice Template."""
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Bulk PI and BOE Import"
+    ws.title = "Bulk Purchase Invoice Template"
     
     headers = [
-        "Purchase Receipt Number", "Purchase Receipt Date", "Supplier Name", 
-        "Purchase Order Number", "Item Code", "Item Name", 
-        "Description", "Quantity", "Rate", "Line Number",
         "Purchase Invoice Posting Date", "Purchase Invoice Number", "Purchase Invoice Date",
-        "Bill of Entry Posting Date", "Bill of Entry Number", "Bill of Entry Date"
+        "Supplier Name", "Purchase Order Number", "Item Code", "Item Name", 
+        "Description", "Quantity", "Price List Rate", "Discount on Price List Rate", "Rate"
     ]
     ws.append(headers)
     
@@ -30,7 +28,7 @@ def download_template():
     wb.save(output)
     output.seek(0)
     
-    frappe.response['filename'] = "Bulk_Invoice_BOE_Import_Template.xlsx"
+    frappe.response['filename'] = "Bulk_Purchase_Invoice_Template.xlsx"
     frappe.response['filecontent'] = output.getvalue()
     frappe.response['type'] = 'binary'
 
@@ -80,7 +78,9 @@ def get_column_map(sheet):
         "pi_date": ["Purchase Invoice Date", "PI Date", "Invoice Date"],
         "boe_post_date": ["Bill of Entry Posting Date"],
         "boe_num": ["Bill of Entry Number", "BOE Number", "BOE No"],
-        "boe_date": ["Bill of Entry Date", "BOE Date"]
+        "boe_date": ["Bill of Entry Date", "BOE Date"],
+        "price_list_rate": ["Price List Rate"],
+        "discount_percentage": ["Discount on Price List Rate"]
     }
     for idx, cell in enumerate(header_row):
         if not cell: continue
@@ -187,9 +187,6 @@ def run_validation(docname):
                     row_errors.append(f"Item/Line '{line_val or item_code}' not found in PO '{po_num}'.")
                 else:
                     pi_item = frappe.get_doc("Purchase Order Item", po_item_name)
-                    # 7-decimal Rate Check
-                    if abs(flt(pi_item.rate) - flt(rate_exc)) > 0.0000001:
-                        row_errors.append(f"Rate mismatch: Excel {rate_exc} vs PO {pi_item.rate}")
                     # 2-of-3 column match
                     score = 0
                     if pi_item.item_code == item_code: score += 1
@@ -298,11 +295,44 @@ def run_processing(docname):
                 if not pr_id and not po_num: # Only for Standalone
                     pi.items = []
                     for r in rows:
-                        pi.append("items", {
+                        item_dict = {
                             "item_code": str(r[col_map["item_code"]]).strip(),
                             "qty": flt(r[col_map["quantity"]]),
                             "rate": flt(r[col_map["rate"]])
-                        })
+                        }
+                        if col_map.get("price_list_rate") is not None and r[col_map["price_list_rate"]] is not None:
+                            item_dict["price_list_rate"] = flt(r[col_map["price_list_rate"]])
+                        if col_map.get("discount_percentage") is not None and r[col_map["discount_percentage"]] is not None:
+                            item_dict["discount_percentage"] = flt(r[col_map["discount_percentage"]])
+                        pi.append("items", item_dict)
+                else:
+                    # Filter items for PO/PR based on Excel rows and update rates/discounts
+                    # Find all item_codes in Excel rows
+                    excel_items = {}
+                    for r in rows:
+                        icode = str(r[col_map["item_code"]]).strip()
+                        if icode not in excel_items:
+                            excel_items[icode] = []
+                        excel_items[icode].append(r)
+                    
+                    kept_items = []
+                    for item in pi.get("items"):
+                        if item.item_code in excel_items and len(excel_items[item.item_code]) > 0:
+                            # Pop the first matching excel row
+                            r = excel_items[item.item_code].pop(0)
+                            
+                            qty = flt(r[col_map["quantity"]]) if col_map.get("quantity") is not None else 0
+                            rate = flt(r[col_map["rate"]]) if col_map.get("rate") is not None else 0
+                            
+                            if qty: item.qty = qty
+                            if rate: item.rate = rate
+                            if col_map.get("price_list_rate") is not None and r[col_map["price_list_rate"]] is not None:
+                                item.price_list_rate = flt(r[col_map["price_list_rate"]])
+                            if col_map.get("discount_percentage") is not None and r[col_map["discount_percentage"]] is not None:
+                                item.discount_percentage = flt(r[col_map["discount_percentage"]])
+                                
+                            kept_items.append(item)
+                    pi.items = kept_items
                 
                 pi.flags.ignore_permissions = True
                 pi.db_insert()
