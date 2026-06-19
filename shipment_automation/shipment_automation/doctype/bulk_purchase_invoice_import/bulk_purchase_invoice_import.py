@@ -11,7 +11,7 @@ def download_template():
     """Generates and downloads the Bulk Purchase Invoice Template."""
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Bulk Purchase Invoice Template"
+    ws.title = "Bulk Purchase Invoice Import"
     
     headers = [
         "Purchase Invoice Posting Date", "Purchase Invoice Number", "Purchase Invoice Date",
@@ -28,7 +28,7 @@ def download_template():
     wb.save(output)
     output.seek(0)
     
-    frappe.response['filename'] = "Bulk_Purchase_Invoice_Template.xlsx"
+    frappe.response['filename'] = "Bulk_Purchase_Invoice_Import.xlsx"
     frappe.response['filecontent'] = output.getvalue()
     frappe.response['type'] = 'binary'
 
@@ -76,9 +76,6 @@ def get_column_map(sheet):
         "pi_post_date": ["Purchase Invoice Posting Date"],
         "pi_num": ["Purchase Invoice Number", "PI Number", "Invoice No"],
         "pi_date": ["Purchase Invoice Date", "PI Date", "Invoice Date"],
-        "boe_post_date": ["Bill of Entry Posting Date"],
-        "boe_num": ["Bill of Entry Number", "BOE Number", "BOE No"],
-        "boe_date": ["Bill of Entry Date", "BOE Date"],
         "price_list_rate": ["Price List Rate"],
         "discount_percentage": ["Discount on Price List Rate"]
     }
@@ -165,7 +162,6 @@ def run_validation(docname):
             
             pi_id = str(row[col_map["pi_num"]]).strip() if col_map.get("pi_num") is not None and row[col_map["pi_num"]] else ""
             pi_post_date = parse_excel_date(row[col_map["pi_post_date"]]) if col_map.get("pi_post_date") is not None else None
-            boe_id = str(row[col_map["boe_num"]]).strip() if col_map.get("boe_num") is not None and row[col_map["boe_num"]] else ""
 
             # ── Scenario Logic & PO Validation ──
             if pr_id:
@@ -182,6 +178,10 @@ def run_validation(docname):
 
             # ── Strict PO Matching (if PO exists) ──
             if po_num and frappe.db.exists("Purchase Order", po_num):
+                po_date = frappe.db.get_value("Purchase Order", po_num, "transaction_date")
+                if pi_post_date and po_date and getdate(pi_post_date) < getdate(po_date):
+                    row_errors.append(f"Posting Date '{pi_post_date}' cannot be before Purchase Order '{po_num}' date '{po_date}'.")
+                    
                 po_item_name = find_po_item_by_line(po_num, item_code, line_val) if line_val else frappe.db.get_value("Purchase Order Item", {"parent": po_num, "item_code": item_code}, "name")
                 if not po_item_name:
                     row_errors.append(f"Item/Line '{line_val or item_code}' not found in PO '{po_num}'.")
@@ -203,12 +203,6 @@ def run_validation(docname):
 
             if pi_post_date and getdate(pi_post_date) > getdate(today):
                 row_errors.append(f"Invoice Posting Date '{pi_post_date}' is a future date.")
-
-            # Overseas BOE Check
-            if boe_id and supplier_name:
-                gst_cat = frappe.db.get_value("Supplier", supplier_name, "gst_category")
-                if gst_cat != "Overseas":
-                    row_errors.append(f"Bill of Entry creation failed: Supplier '{supplier_name}' is '{gst_cat}', BOE only allowed for 'Overseas'.")
 
             if row_errors:
                 errors.append(f"Row {row_idx} ❌ " + " | ".join(row_errors))
@@ -254,9 +248,6 @@ def run_processing(docname):
                 if not supplier: supplier = supplier_val
                 pi_post_date = parse_excel_date(first[col_map["pi_post_date"]])
                 pi_date = parse_excel_date(first[col_map["pi_date"]])
-                boe_id = str(first[col_map["boe_num"]]).strip() if col_map.get("boe_num") is not None and first[col_map["boe_num"]] else ""
-                boe_post_date = parse_excel_date(first[col_map["boe_post_date"]])
-                boe_date = parse_excel_date(first[col_map["boe_date"]])
 
                 if frappe.db.exists("Purchase Invoice", pi_id): continue
 
@@ -341,21 +332,7 @@ def run_processing(docname):
                 pi.run_method("on_update")
                 pi.submit()
 
-                # ── Create BOE (Overseas only) ──
-                if boe_id and frappe.db.get_value("Supplier", supplier, "gst_category") == "Overseas":
-                    boe = frappe.new_doc("Bill of Entry")
-                    boe.name = boe_id
-                    boe.purchase_invoice = pi.name
-                    boe.posting_date = boe_post_date or boe_date or nowdate()
-                    boe.bill_of_entry_number = boe_id
-                    boe.bill_of_entry_date = boe_date or boe_post_date or nowdate()
-                    boe.company = pi.company
-                    boe.supplier = pi.supplier
-                    boe.flags.ignore_permissions = True
-                    boe.insert(ignore_mandatory=True)
-                    created.append(f"✅ {pi_id} (BOE {boe_id})")
-                else:
-                    created.append(f"✅ {pi_id}")
+                created.append(f"✅ {pi_id}")
 
             except Exception as e:
                 created.append(f"❌ {pi_id}: {str(e)}")
