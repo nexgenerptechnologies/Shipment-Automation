@@ -300,8 +300,14 @@ def run_processing(docname):
                     
                     bill_no = str(r[col_map["bill_no"]]).strip() if col_map.get("bill_no") is not None and r[col_map["bill_no"]] else ""
                     if bill_no:
-                        acc_row["reference_type"] = "Purchase Invoice" if credit_val > 0 else "Sales Invoice" 
-                        acc_row["reference_name"] = bill_no
+                        if je.voucher_type == "Opening Entry":
+                            # For Opening Entries, the original invoice doesn't exist in ERPNext yet.
+                            # So we cannot link it via reference_type/name (it would throw a Link Error).
+                            acc_row["user_remark"] = f"Bill No: {bill_no}"
+                        else:
+                            acc_row["reference_type"] = "Purchase Invoice" if credit_val > 0 else "Sales Invoice" 
+                            acc_row["reference_name"] = bill_no
+                        
                         acc_row["bill_no"] = bill_no
                         
                     bill_date = r[col_map["bill_date"]] if col_map.get("bill_date") is not None else None
