@@ -273,7 +273,7 @@ def run_processing(docname):
                     si.insert(ignore_permissions=True)
                     
                     if si_id and si.name != si_id:
-                        frappe.rename_doc("Sales Invoice", si.name, si_id, force=True, ignore_permissions=True)
+                        frappe.rename_doc("Sales Invoice", si.name, si_id, force=True)
                         si.name = si_id
                     
                     # si.submit() # Optional
