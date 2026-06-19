@@ -115,9 +115,13 @@ def resolve_party_id(party_type, party_name):
         party_id = frappe.db.get_value(party_type, {"name": party_name}, "name")
     return party_id or party_name
 
-def get_temporary_opening_account():
-    # Try to find an account with 'Temporary Opening' in its name
-    acc = frappe.db.get_value("Account", {"account_name": ["like", "%Temporary Opening%"]}, "name")
+def get_temporary_opening_account(company=None):
+    # Try to find an account with 'Temporary Opening' in its name for the specific company
+    filters = {"account_name": ["like", "%Temporary Opening%"]}
+    if company:
+        filters["company"] = company
+    
+    acc = frappe.db.get_value("Account", filters, "name")
     if acc: return acc
     return "Temporary Opening"
 
@@ -329,7 +333,12 @@ def run_processing(docname):
                 # Auto Balancing Logic
                 diff = total_debit - total_credit
                 if abs(diff) > 0.01:
-                    balancing_account = get_temporary_opening_account()
+                    first_account = str(rows[0][col_map["account"]]).strip() if rows and rows[0][col_map["account"]] else None
+                    company = None
+                    if first_account:
+                        company = frappe.db.get_value("Account", first_account, "company")
+                    balancing_account = get_temporary_opening_account(company)
+                    
                     acc_row = {
                         "account": balancing_account,
                         "debit_in_account_currency": abs(diff) if diff < 0 else 0.0,
