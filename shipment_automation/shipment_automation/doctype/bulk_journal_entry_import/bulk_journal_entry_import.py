@@ -70,8 +70,8 @@ def get_column_map(sheet):
         "account": ["Account (Accounting Entries)", "Account"],
         "party": ["Party (Accounting Entries)", "Party", "Party (Optional)"],
         "party_type": ["Party Type (Accounting Entries)", "Party Type", "Party Type (Optional)"],
-        "debit": ["Debit (Accounting Entries)", "Debit"],
-        "credit": ["Credit (Accounting Entries)", "Credit"],
+        "debit": ["Debit (Accounting Entries)", "Debit", "Debit (INR)", "Debit (USD)"],
+        "credit": ["Credit (Accounting Entries)", "Credit", "Credit (INR)", "Credit (USD)"],
         "bill_no": ["Bill No"],
         "bill_date": ["Bill Date"],
         "due_date": ["Due Date"],
@@ -125,6 +125,20 @@ def run_validation(docname):
         col_map = get_column_map(sheet)
         
         errors = []
+        
+        # Check for missing mandatory columns
+        missing_cols = []
+        if "debit" not in col_map: missing_cols.append("Debit (Accounting Entries)")
+        if "credit" not in col_map: missing_cols.append("Credit (Accounting Entries)")
+        if "account" not in col_map: missing_cols.append("Account (Accounting Entries)")
+        
+        if missing_cols:
+            errors.append(f"❌ Missing required columns in Excel header: {', '.join(missing_cols)}")
+            doc.db_set("status", "Failed")
+            doc.db_set("validation_log", "❌ Issues found:\\n\\n" + "\\n".join(errors))
+            frappe.db.commit()
+            return
+            
         voucher_groups = {}
         
         for row_idx, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
@@ -146,7 +160,7 @@ def run_validation(docname):
             due_date = row[col_map["due_date"]] if col_map.get("due_date") is not None else None
             remark = str(row[col_map["remark"]]).strip() if col_map.get("remark") is not None and row[col_map["remark"]] else ""
             
-            posting_date = parse_excel_date(row[col_map["posting_date"]])
+            posting_date = parse_excel_date(row[col_map["posting_date"]]) if col_map.get("posting_date") is not None else ""
 
             # Auto Grouping by (Entry Type, Posting Date, User Remark)
             v_id = f"{v_type}_{posting_date}_{remark}"
@@ -211,13 +225,16 @@ def run_processing(docname):
         sheet = wb.active
         col_map = get_column_map(sheet)
         
+        if "debit" not in col_map or "credit" not in col_map:
+            raise Exception("Missing Debit or Credit column. Please fix the Excel header.")
+            
         # Auto Grouping
         groups = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
             v_type = str(row[col_map["v_type"]]).strip() if col_map.get("v_type") is not None else ""
             remark = str(row[col_map["remark"]]).strip() if col_map.get("remark") is not None and row[col_map["remark"]] else ""
-            posting_date = parse_excel_date(row[col_map["posting_date"]])
+            posting_date = parse_excel_date(row[col_map["posting_date"]]) if col_map.get("posting_date") is not None else ""
             v_id = f"{v_type}_{posting_date}_{remark}"
             
             if v_id not in groups: groups[v_id] = []
