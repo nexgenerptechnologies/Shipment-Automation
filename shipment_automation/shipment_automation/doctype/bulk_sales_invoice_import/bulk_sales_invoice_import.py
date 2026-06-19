@@ -15,9 +15,9 @@ def download_template():
     ws.title = "Bulk Sales Invoice Import"
     
     headers = [
-        "Sales Invoice Number (Optional)", "Posting Date", "Customer Name", 
-        "Delivery Note Number", "Sales Order Number", "Item Code", "Item Name", 
-        "Description", "Quantity", "Rate", "Update Stock (Yes/No)"
+        "Posting Date", "Sales Invoice Number (Optional)", "Sales Invoice Date",
+        "Delivery Note Number", "Sales Order Number", "Customer Name", 
+        "Item Code", "Item Name", "Description", "Quantity", "Rate", "Update Stock (Yes/No)"
     ]
     ws.append(headers)
     
@@ -67,6 +67,7 @@ def get_column_map(sheet):
     expected = {
         "si_num": ["Sales Invoice Number (Optional)", "Sales Invoice Number", "SI Number"],
         "posting_date": ["Posting Date"],
+        "si_date": ["Sales Invoice Date", "SI Date"],
         "customer": ["Customer Name", "Customer"],
         "dn_num": ["Delivery Note Number", "DN Number"],
         "so_num": ["Sales Order Number", "SO Number"],
@@ -133,6 +134,16 @@ def run_validation(docname):
                 if not validate_2_of_3(it_doc, item_code, item_name, description):
                     row_errors.append("2-of-3 match failed (Code/Name/Description).")
 
+            rate_exc = flt(row[col_map["rate"]]) if col_map.get("rate") is not None and row[col_map["rate"]] else 0
+            if dn_num and item_code and rate_exc:
+                dn_rate = frappe.db.get_value("Delivery Note Item", {"parent": dn_num, "item_code": item_code}, "rate")
+                if dn_rate is not None and flt(dn_rate) != rate_exc:
+                    row_errors.append(f"Rate {rate_exc} does not match Delivery Note {dn_num} rate ({dn_rate}).")
+            elif so_num and item_code and rate_exc:
+                so_rate = frappe.db.get_value("Sales Order Item", {"parent": so_num, "item_code": item_code}, "rate")
+                if so_rate is not None and flt(so_rate) != rate_exc:
+                    row_errors.append(f"Rate {rate_exc} does not match Sales Order {so_num} rate ({so_rate}).")
+
             if posting_date and getdate(posting_date) > getdate(today):
                 row_errors.append(f"Posting Date '{posting_date}' is a future date.")
 
@@ -191,9 +202,12 @@ def run_processing(docname):
                 si = frappe.new_doc("Sales Invoice")
                 if si_id:
                     si.name = si_id
+                    si.flags.ignore_autoname = True
                 
                 si.customer = customer
-                si.posting_date = posting_date
+                si.set_posting_time = 1
+                si_date = parse_excel_date(first[col_map["si_date"]]) if col_map.get("si_date") is not None else None
+                si.posting_date = si_date or posting_date
                 si.update_stock = update_stock
                 
                 for r in rows:
@@ -230,10 +244,18 @@ def run_processing(docname):
                             if not rate: item_row.rate = so_item.rate
 
                 si.flags.ignore_permissions = True
-                si.insert()
-                # si.submit() # Optional
-                created.append(f"✅ {si.name}")
+                
+                frappe.db.savepoint("si_create")
+                try:
+                    si.set_missing_values()
+                    si.insert(ignore_permissions=True)
+                    # si.submit() # Optional
+                    created.append(f"✅ {si.name}")
+                except Exception as e:
+                    frappe.db.rollback(save_point="si_create")
+                    created.append(f"❌ Error creating SI {si_id or customer}: {str(e)}")
             except Exception as e:
+                frappe.db.rollback()
                 created.append(f"❌ Error creating SI: {str(e)}")
 
         doc.db_set("status", "Completed")
