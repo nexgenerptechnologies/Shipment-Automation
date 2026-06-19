@@ -14,9 +14,8 @@ def download_template():
     ws.title = "Bulk JE Import Template"
     
     headers = [
-        "Entry Type", "Posting Date", "Account (Accounting Entries)", 
-        "Party (Accounting Entries)", "Party Type (Accounting Entries)", 
-        "Debit (Accounting Entries)", "Credit (Accounting Entries)", 
+        "Voucher ID (Link rows)", "Entry Type", "Posting Date", "Account", 
+        "Party", "Party Type", "Debit", "Credit", 
         "Bill No", "Bill Date", "Due Date", "User Remark"
     ]
     ws.append(headers)
@@ -65,6 +64,7 @@ def get_column_map(sheet):
     header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
     mapping = {}
     expected = {
+        "v_id": ["Voucher ID (Link rows)", "Voucher ID"],
         "v_type": ["Entry Type", "Voucher Type"],
         "posting_date": ["Posting Date"],
         "account": ["Account (Accounting Entries)", "Account"],
@@ -115,6 +115,11 @@ def resolve_party_id(party_type, party_name):
         party_id = frappe.db.get_value(party_type, {"name": party_name}, "name")
     return party_id or party_name
 
+def get_temporary_opening_account():
+    # Try to find an account with 'Temporary Opening' in its name
+    acc = frappe.db.get_value("Account", {"account_name": ["like", "%Temporary Opening%"]}, "name")
+    if acc: return acc
+    return "Temporary Opening"
 
 def run_validation(docname):
     doc = frappe.get_doc("Bulk Journal Entry Import", docname)
@@ -125,12 +130,14 @@ def run_validation(docname):
         col_map = get_column_map(sheet)
         
         errors = []
+        info_logs = []
         
         # Check for missing mandatory columns
         missing_cols = []
-        if "debit" not in col_map: missing_cols.append("Debit (Accounting Entries)")
-        if "credit" not in col_map: missing_cols.append("Credit (Accounting Entries)")
-        if "account" not in col_map: missing_cols.append("Account (Accounting Entries)")
+        if "debit" not in col_map: missing_cols.append("Debit")
+        if "credit" not in col_map: missing_cols.append("Credit")
+        if "account" not in col_map: missing_cols.append("Account")
+        if "v_type" not in col_map: missing_cols.append("Entry Type")
         
         if missing_cols:
             errors.append(f"❌ Missing required columns in Excel header: {', '.join(missing_cols)}")
@@ -145,8 +152,9 @@ def run_validation(docname):
             if not any(row): continue
             
             row_errors = []
+            v_id_val = str(row[col_map["v_id"]]).strip() if col_map.get("v_id") is not None and row[col_map["v_id"]] else ""
             v_type = str(row[col_map["v_type"]]).strip() if col_map.get("v_type") is not None else ""
-            account = str(row[col_map["account"]]).strip() if col_map.get("account") is not None else ""
+            account = str(row[col_map["account"]]).strip() if col_map.get("account") is not None and row[col_map["account"]] else ""
             p_type = str(row[col_map["party_type"]]).strip() if col_map.get("party_type") is not None and row[col_map["party_type"]] else ""
             party_val = str(row[col_map["party"]]).strip() if col_map.get("party") is not None and row[col_map["party"]] else ""
             
@@ -162,11 +170,19 @@ def run_validation(docname):
             
             posting_date = parse_excel_date(row[col_map["posting_date"]]) if col_map.get("posting_date") is not None else ""
 
-            # Auto Grouping by (Entry Type, Posting Date, User Remark)
-            v_id = f"{v_type}_{posting_date}_{remark}"
+            # Flexible Grouping: Use Voucher ID if present, else fallback to auto-grouping
+            if v_id_val:
+                v_id = v_id_val
+                display = f"Voucher '{v_id}'"
+            else:
+                v_id = f"{v_type}_{posting_date}_{remark}"
+                display = f"Group '{v_type} on {posting_date}'"
 
             if not v_type: row_errors.append("Entry Type is mandatory.")
-            if not account or not frappe.db.exists("Account", account):
+            
+            if not account:
+                pass # If user leaves account blank, we might just assume it's entirely Party based, or error out
+            elif not frappe.db.exists("Account", account):
                 row_errors.append(f"Account '{account}' not found.")
             else:
                 acc_type = frappe.db.get_value("Account", account, "account_type")
@@ -195,18 +211,22 @@ def run_validation(docname):
                 errors.append(f"Row {row_idx} ❌ " + " | ".join(row_errors))
             
             # Sum debits/credits per voucher to check balance later
-            if v_id not in voucher_groups: voucher_groups[v_id] = {"d": 0, "c": 0, "display": f"{v_type} on {posting_date}"}
+            if v_id not in voucher_groups: voucher_groups[v_id] = {"d": 0, "c": 0, "display": display}
             voucher_groups[v_id]["d"] += debit
             voucher_groups[v_id]["c"] += credit
 
-        # Final Balance Check
+        # Final Balance Check (Auto-Balancing Logic)
         for vid, sums in voucher_groups.items():
-            if abs(sums["d"] - sums["c"]) > 0.01:
-                errors.append(f"Grouping '{sums['display']}' ❌ Out of balance! Total Debit: {sums['d']} | Total Credit: {sums['c']}")
+            diff = sums["d"] - sums["c"]
+            if abs(diff) > 0.01:
+                info_logs.append(f"ℹ️ {sums['display']} is out of balance. Auto-Balancing: Difference of {abs(diff):.2f} will be posted to Temporary Opening.")
 
         if not errors:
             doc.db_set("status", "Validated")
-            doc.db_set("validation_log", f"✅ All entries are balanced and validated.")
+            log_msg = f"✅ All entries validated successfully."
+            if info_logs:
+                log_msg += "\\n\\n" + "\\n".join(info_logs)
+            doc.db_set("validation_log", log_msg)
         else:
             doc.db_set("status", "Failed")
             doc.db_set("validation_log", "❌ Issues found:\\n\\n" + "\\n".join(errors))
@@ -228,14 +248,20 @@ def run_processing(docname):
         if "debit" not in col_map or "credit" not in col_map:
             raise Exception("Missing Debit or Credit column. Please fix the Excel header.")
             
-        # Auto Grouping
+        # Grouping
         groups = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
+            
+            v_id_val = str(row[col_map["v_id"]]).strip() if col_map.get("v_id") is not None and row[col_map["v_id"]] else ""
             v_type = str(row[col_map["v_type"]]).strip() if col_map.get("v_type") is not None else ""
             remark = str(row[col_map["remark"]]).strip() if col_map.get("remark") is not None and row[col_map["remark"]] else ""
             posting_date = parse_excel_date(row[col_map["posting_date"]]) if col_map.get("posting_date") is not None else ""
-            v_id = f"{v_type}_{posting_date}_{remark}"
+            
+            if v_id_val:
+                v_id = v_id_val
+            else:
+                v_id = f"{v_type}_{posting_date}_{remark}"
             
             if v_id not in groups: groups[v_id] = []
             groups[v_id].append(row)
@@ -250,22 +276,30 @@ def run_processing(docname):
                 remark_val = str(first[col_map["remark"]]).strip() if col_map.get("remark") is not None and str(first[col_map["remark"]]).strip() else f"Bulk Import {je.voucher_type}"
                 je.user_remark = remark_val
                 
+                total_debit = 0.0
+                total_credit = 0.0
+                
                 for r in rows:
                     p_type = str(r[col_map["party_type"]]).strip() if col_map.get("party_type") is not None and r[col_map["party_type"]] else None
                     party_val = str(r[col_map["party"]]).strip() if col_map.get("party") is not None and r[col_map["party"]] else None
                     party = resolve_party_id(p_type, party_val) if p_type and party_val else None
                     
+                    debit_val = flt(r[col_map["debit"]]) if col_map.get("debit") is not None else 0.0
+                    credit_val = flt(r[col_map["credit"]]) if col_map.get("credit") is not None else 0.0
+                    
+                    total_debit += debit_val
+                    total_credit += credit_val
+                    
                     acc_row = {
-                        "account": str(r[col_map["account"]]).strip(),
+                        "account": str(r[col_map["account"]]).strip() if r[col_map["account"]] else "",
                         "party_type": p_type,
                         "party": party,
-                        "debit_in_account_currency": flt(r[col_map["debit"]]) if col_map.get("debit") is not None else 0.0,
-                        "credit_in_account_currency": flt(r[col_map["credit"]]) if col_map.get("credit") is not None else 0.0
+                        "debit_in_account_currency": debit_val,
+                        "credit_in_account_currency": credit_val
                     }
                     
                     bill_no = str(r[col_map["bill_no"]]).strip() if col_map.get("bill_no") is not None and r[col_map["bill_no"]] else ""
                     if bill_no:
-                        credit_val = flt(r[col_map["credit"]]) if col_map.get("credit") is not None else 0.0
                         acc_row["reference_type"] = "Purchase Invoice" if credit_val > 0 else "Sales Invoice" 
                         acc_row["reference_name"] = bill_no
                         acc_row["bill_no"] = bill_no
@@ -284,6 +318,17 @@ def run_processing(docname):
                             acc_row["reference_due_date"] = dd
                             acc_row["due_date"] = dd
 
+                    je.append("accounts", acc_row)
+
+                # Auto Balancing Logic
+                diff = total_debit - total_credit
+                if abs(diff) > 0.01:
+                    balancing_account = get_temporary_opening_account()
+                    acc_row = {
+                        "account": balancing_account,
+                        "debit_in_account_currency": abs(diff) if diff < 0 else 0.0,
+                        "credit_in_account_currency": diff if diff > 0 else 0.0
+                    }
                     je.append("accounts", acc_row)
 
                 je.flags.ignore_permissions = True
