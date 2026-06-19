@@ -16,7 +16,7 @@ def download_template():
     headers = [
         "Payment ID (Link rows)", "Payment Type", "Posting Date", "Mode of Payment",
         "Company Bank Account", "Party Type", "Party", "Total Amount", 
-        "Reference Type", "Reference Name", "Allocated Amount", "UTR/Ref No", "Ref Date"
+        "Reference Type", "Supplier Invoice No", "Allocated Amount", "UTR/Ref No", "Ref Date"
     ]
     ws.append(headers)
     
@@ -73,7 +73,7 @@ def get_column_map(sheet):
         "party": ["Party"],
         "total_amount": ["Total Amount", "Amount", "Paid Amount"],
         "ref_type": ["Reference Type"],
-        "ref_name": ["Reference Name", "Invoice No"],
+        "ref_name": ["Reference Name", "Invoice No", "Supplier Invoice No"],
         "allocated_amount": ["Allocated Amount"],
         "utr_no": ["UTR/Ref No", "Reference No", "Cheque No"],
         "ref_date": ["Ref Date", "Reference Date", "Cheque Date"]
@@ -116,6 +116,33 @@ def resolve_party_id(party_type, party_name):
         party_id = frappe.db.get_value(party_type, {"name": party_name}, "name")
     return party_id or party_name
 
+def resolve_reference_name(ref_type, supplier_invoice_no, party_type=None, party=None):
+    if not supplier_invoice_no: return ""
+    
+    # 1. Check if exact Name (Internal ID) exists
+    if frappe.db.exists(ref_type, supplier_invoice_no):
+        return supplier_invoice_no
+        
+    # 2. If it's a Purchase Invoice, try finding by bill_no
+    if ref_type == "Purchase Invoice":
+        filters = {"bill_no": supplier_invoice_no, "docstatus": 1}
+        if party: filters["supplier"] = party
+        doc_name = frappe.db.get_value(ref_type, filters, "name")
+        if doc_name: return doc_name
+        
+    # 3. If it's a Journal Entry, try finding by bill_no in its child table
+    if ref_type == "Journal Entry":
+        query = "SELECT parent FROM `tabJournal Entry Account` WHERE bill_no = %s AND docstatus = 1"
+        args = [supplier_invoice_no]
+        if party_type and party:
+            query += " AND party_type = %s AND party = %s"
+            args.extend([party_type, party])
+        query += " LIMIT 1"
+        res = frappe.db.sql(query, args)
+        if res: return res[0][0]
+        
+    return supplier_invoice_no
+
 def run_validation(docname):
     doc = frappe.get_doc("Bulk Payment Entry Import", docname)
     try:
@@ -157,16 +184,18 @@ def run_validation(docname):
             ptype = str(row[col_map["party_type"]]).strip() if col_map.get("party_type") is not None and row[col_map["party_type"]] else ""
             pname = str(row[col_map["party"]]).strip() if col_map.get("party") is not None and row[col_map["party"]] else ""
             
+            party_id = ""
             if ptype and pname:
                 party_id = resolve_party_id(ptype, pname)
                 if not frappe.db.exists(ptype, party_id):
                     row_errors.append(f"Party '{pname}' of type '{ptype}' not found.")
                     
             ref_type = str(row[col_map["ref_type"]]).strip() if col_map.get("ref_type") is not None and row[col_map["ref_type"]] else ""
-            ref_name = str(row[col_map["ref_name"]]).strip() if col_map.get("ref_name") is not None and row[col_map["ref_name"]] else ""
-            if ref_type and ref_name:
-                if not frappe.db.exists(ref_type, ref_name):
-                    row_errors.append(f"{ref_type} '{ref_name}' not found.")
+            ref_name_val = str(row[col_map["ref_name"]]).strip() if col_map.get("ref_name") is not None and row[col_map["ref_name"]] else ""
+            if ref_type and ref_name_val:
+                actual_ref = resolve_reference_name(ref_type, ref_name_val, ptype, party_id if ptype else "")
+                if not frappe.db.exists(ref_type, actual_ref):
+                    row_errors.append(f"{ref_type} with ID or Supplier Invoice No '{ref_name_val}' not found.")
                     
             posting_date = row[col_map["posting_date"]]
             parsed_pd = parse_excel_date(posting_date)
@@ -270,13 +299,14 @@ def run_processing(docname):
                 # Set References
                 for r in rows:
                     ref_type = str(r[col_map["ref_type"]]).strip() if col_map.get("ref_type") is not None and r[col_map["ref_type"]] else ""
-                    ref_name = str(r[col_map["ref_name"]]).strip() if col_map.get("ref_name") is not None and r[col_map["ref_name"]] else ""
+                    ref_name_val = str(r[col_map["ref_name"]]).strip() if col_map.get("ref_name") is not None and r[col_map["ref_name"]] else ""
                     alloc_amt = flt(r[col_map["allocated_amount"]]) if col_map.get("allocated_amount") is not None else 0.0
                     
-                    if ref_type and ref_name and alloc_amt > 0:
+                    if ref_type and ref_name_val and alloc_amt > 0:
+                        actual_ref = resolve_reference_name(ref_type, ref_name_val, pe.party_type, pe.party)
                         pe.append("references", {
                             "reference_doctype": ref_type,
-                            "reference_name": ref_name,
+                            "reference_name": actual_ref,
                             "allocated_amount": alloc_amt
                         })
                 
