@@ -268,6 +268,7 @@ def run_processing(docname):
 
                 # Common Headers
                 pi.name = pi_id
+                pi.flags.ignore_autoname = True
                 pi.supplier = supplier
                 pi.posting_date = pi_post_date or pi_date or nowdate()
                 pi.bill_no = pi_id
@@ -326,15 +327,30 @@ def run_processing(docname):
                     pi.items = kept_items
                 
                 pi.flags.ignore_permissions = True
-                pi.db_insert()
-                for i in pi.get("items"): i.db_insert()
-                for t in pi.get("taxes"): t.db_insert()
-                pi.run_method("on_update")
-                pi.submit()
-
-                created.append(f"✅ {pi_id}")
-
+                
+                # Temporarily bypass the PO rate restriction for this PI
+                original_get_single_value = frappe.db.get_single_value
+                def mock_get_single_value(doctype, fieldname):
+                    if doctype == "Buying Settings" and fieldname == "action_if_item_rate_is_greater_than_purchase_order_rate":
+                        return "Don't Restrict"
+                    return original_get_single_value(doctype, fieldname)
+                
+                frappe.db.savepoint("pi_create")
+                frappe.db.get_single_value = mock_get_single_value
+                
+                try:
+                    pi.set_missing_values()
+                    pi.insert(ignore_permissions=True)
+                    pi.submit()
+                    created.append(f"✅ {pi_id}")
+                except Exception as e:
+                    frappe.db.rollback(save_point="pi_create")
+                    created.append(f"❌ {pi_id}: {str(e)}")
+                finally:
+                    frappe.db.get_single_value = original_get_single_value
+                    
             except Exception as e:
+                frappe.db.rollback()
                 created.append(f"❌ {pi_id}: {str(e)}")
 
         doc.db_set("status", "Completed")
