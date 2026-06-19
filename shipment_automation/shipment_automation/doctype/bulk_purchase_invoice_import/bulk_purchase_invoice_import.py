@@ -341,7 +341,7 @@ def run_processing(docname):
                 try:
                     pi.set_missing_values()
                     pi.insert(ignore_permissions=True)
-                    pi.submit()
+                    # pi.submit()  # User requested invoice to remain in Draft status
                     created.append(f"✅ {pi_id}")
                 except Exception as e:
                     frappe.db.rollback(save_point="pi_create")
