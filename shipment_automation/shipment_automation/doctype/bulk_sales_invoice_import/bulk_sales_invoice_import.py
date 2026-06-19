@@ -103,7 +103,8 @@ def run_validation(docname):
             if not any(row): continue
             
             row_errors = []
-            si_id = str(row[col_map["si_num"]]).strip() if col_map.get("si_num") is not None and row[col_map["si_num"]] else ""
+            si_id_val = row[col_map["si_num"]] if col_map.get("si_num") is not None else None
+            si_id = str(si_id_val).strip() if si_id_val is not None and str(si_id_val).strip() else ""
             customer = str(row[col_map["customer"]]).strip() if col_map.get("customer") is not None else ""
             dn_num = str(row[col_map["dn_num"]]).strip() if col_map.get("dn_num") is not None and row[col_map["dn_num"]] else ""
             so_num = str(row[col_map["so_num"]]).strip() if col_map.get("so_num") is not None and row[col_map["so_num"]] else ""
@@ -180,7 +181,8 @@ def run_processing(docname):
         si_groups = {}
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(row): continue
-            si_id = str(row[col_map["si_num"]]).strip() if col_map.get("si_num") is not None and row[col_map["si_num"]] else ""
+            si_id_val = row[col_map["si_num"]] if col_map.get("si_num") is not None else None
+            si_id = str(si_id_val).strip() if si_id_val is not None and str(si_id_val).strip() else ""
             cust = str(row[col_map["customer"]]).strip()
             date = parse_excel_date(row[col_map["posting_date"]]) or nowdate()
             
@@ -195,7 +197,8 @@ def run_processing(docname):
                 customer_val = str(first[col_map["customer"]]).strip()
                 customer = frappe.db.get_value("Customer", {"customer_name": customer_val}, "name")
                 if not customer: customer = customer_val
-                si_id = str(first[col_map["si_num"]]).strip() if col_map.get("si_num") is not None and first[col_map["si_num"]] else ""
+                si_id_val = first[col_map["si_num"]] if col_map.get("si_num") is not None else None
+                si_id = str(si_id_val).strip() if si_id_val is not None and str(si_id_val).strip() else ""
                 posting_date = parse_excel_date(first[col_map["posting_date"]]) or nowdate()
                 update_stock = 1 if str(first[col_map["update_stock"]]).strip().lower() in ["yes", "y", "1"] else 0
                 
@@ -203,6 +206,7 @@ def run_processing(docname):
                 if si_id:
                     si.name = si_id
                     si.flags.ignore_autoname = True
+                    si.naming_series = ""
                 
                 si.customer = customer
                 si.set_posting_time = 1
