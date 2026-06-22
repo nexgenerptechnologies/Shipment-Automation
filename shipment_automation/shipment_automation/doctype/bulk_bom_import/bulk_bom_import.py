@@ -33,13 +33,10 @@ class BulkBOMImport(Document):
         ]
         ws.append(headers)
         
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
+        file_path = get_site_path("public", "files", "Bulk_BOM_Import_Minimal.xlsx")
+        wb.save(file_path)
         
-        frappe.response['filename'] = "Bulk_BOM_Import_Minimal.xlsx"
-        frappe.response['filecontent'] = output.getvalue()
-        frappe.response['type'] = 'binary'
+        return "/files/Bulk_BOM_Import_Minimal.xlsx"
 
 def clean_val(val):
     if val is None or str(val).lower() == "none":
