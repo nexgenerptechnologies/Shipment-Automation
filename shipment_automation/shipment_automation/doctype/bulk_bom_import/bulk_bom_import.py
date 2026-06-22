@@ -24,27 +24,20 @@ class BulkBOMImport(Document):
     @frappe.whitelist()
     def download_template(self):
         wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Bulk BOM Import"
         
-        # Sheet 1: Materials
-        ws1 = wb.active
-        ws1.title = "BOM Materials"
-        ws1.append([
-            "Item to Manufacture (Item Code)", "Qty to Manufacture", 
-            "Item Consume", "Qty Required"
-        ])
-        
-        # Sheet 2: Operations
-        ws2 = wb.create_sheet(title="BOM Operations")
-        ws2.append([
-            "Item to Manufacture (Item Code)", "Operation", 
-            "Workstation", "Operation Time (Mins)", "Hour Rate", "Is Subcontracted"
-        ])
+        headers = [
+            "Item to Manufacture", "BOM Qty", "Row Type (Material/Operation)", 
+            "Code / Name", "Qty / Time (Mins)", "Workstation"
+        ]
+        ws.append(headers)
         
         output = BytesIO()
         wb.save(output)
         output.seek(0)
         
-        frappe.response['filename'] = "Bulk_BOM_Import_Template.xlsx"
+        frappe.response['filename'] = "Bulk_BOM_Import_Minimal.xlsx"
         frappe.response['filecontent'] = output.getvalue()
         frappe.response['type'] = 'binary'
 
@@ -60,14 +53,11 @@ def get_col_map(sheet):
         if not cell: continue
         clean = str(cell).strip().lower()
         if "manufacture" in clean or "parent" in clean: mapping["parent"] = idx
-        elif "qty to manufacture" in clean: mapping["qty"] = idx
-        elif "consume" in clean or "component" in clean: mapping["child"] = idx
-        elif "qty required" in clean or "child qty" in clean: mapping["child_qty"] = idx
-        elif "operation" in clean and "time" not in clean: mapping["operation"] = idx
-        elif "workstation" in clean and "type" not in clean: mapping["workstation"] = idx
-        elif "operation time" in clean: mapping["op_time"] = idx
-        elif "hour rate" in clean: mapping["hour_rate"] = idx
-        elif "subcontracted" in clean: mapping["is_subcontracted"] = idx
+        elif "bom qty" in clean: mapping["bom_qty"] = idx
+        elif "row type" in clean: mapping["row_type"] = idx
+        elif "code" in clean or "name" in clean: mapping["code_name"] = idx
+        elif "qty" in clean or "time" in clean: mapping["qty_time"] = idx
+        elif "workstation" in clean: mapping["workstation"] = idx
     return mapping
 
 def run_validation(docname):
@@ -75,43 +65,42 @@ def run_validation(docname):
     try:
         file_doc = frappe.get_doc("File", {"file_url": doc.bom_excel})
         wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
+        sheet = wb.active
+        col_map = get_col_map(sheet)
         
         errors = []
+        current_parent = ""
         
-        # Validate Materials
-        if "BOM Materials" in wb.sheetnames:
-            ws1 = wb["BOM Materials"]
-            col_map1 = get_col_map(ws1)
-            for i, row in enumerate(ws1.iter_rows(min_row=2, values_only=True), start=2):
-                if not any(row): continue
-                parent = clean_val(row[col_map1.get("parent", -1)]) if "parent" in col_map1 else ""
-                child = clean_val(row[col_map1.get("child", -1)]) if "child" in col_map1 else ""
-                
-                if not parent:
-                    errors.append(f"Materials Row {i}: Item to Manufacture is missing.")
-                elif not frappe.db.exists("Item", parent):
-                    errors.append(f"Materials Row {i}: Item to Manufacture '{parent}' does not exist.")
-                
-                if child and not frappe.db.exists("Item", child):
-                    errors.append(f"Materials Row {i}: Item Consume '{child}' does not exist.")
-        
-        # Validate Operations
-        if "BOM Operations" in wb.sheetnames:
-            ws2 = wb["BOM Operations"]
-            col_map2 = get_col_map(ws2)
-            for i, row in enumerate(ws2.iter_rows(min_row=2, values_only=True), start=2):
-                if not any(row): continue
-                parent = clean_val(row[col_map2.get("parent", -1)]) if "parent" in col_map2 else ""
-                op_name = clean_val(row[col_map2.get("operation", -1)]) if "operation" in col_map2 else ""
-                workstation = clean_val(row[col_map2.get("workstation", -1)]) if "workstation" in col_map2 else ""
-                
-                if not parent:
-                    errors.append(f"Operations Row {i}: Item to Manufacture is missing.")
-                elif not frappe.db.exists("Item", parent):
-                    errors.append(f"Operations Row {i}: Item to Manufacture '{parent}' does not exist.")
-                
-                if op_name and workstation and not frappe.db.exists("Workstation", workstation):
-                    errors.append(f"Operations Row {i}: Workstation '{workstation}' does not exist.")
+        for i, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+            if not any(row): continue
+            
+            parent_raw = clean_val(row[col_map.get("parent", 0)])
+            if parent_raw:
+                current_parent = parent_raw
+            
+            parent = current_parent
+            if not parent:
+                errors.append(f"Row {i}: Item to Manufacture is missing.")
+                continue
+            elif not frappe.db.exists("Item", parent):
+                errors.append(f"Row {i}: Item to Manufacture '{parent}' does not exist.")
+            
+            row_type = clean_val(row[col_map.get("row_type", -1)]).lower()
+            code_name = clean_val(row[col_map.get("code_name", -1)])
+            qty_time = flt(row[col_map.get("qty_time", -1)])
+            workstation = clean_val(row[col_map.get("workstation", -1)])
+            
+            if "material" in row_type or "scrap" in row_type:
+                if not code_name:
+                    errors.append(f"Row {i}: Code / Name is required for Materials.")
+                elif not frappe.db.exists("Item", code_name):
+                    errors.append(f"Row {i}: Item '{code_name}' does not exist.")
+            
+            elif "operation" in row_type:
+                if not code_name:
+                    errors.append(f"Row {i}: Code / Name (Operation Name) is required for Operations.")
+                if workstation and not frappe.db.exists("Workstation", workstation):
+                    errors.append(f"Row {i}: Workstation '{workstation}' does not exist.")
 
         if errors:
             doc.db_set("status", "Failed")
@@ -131,58 +120,55 @@ def run_processing(docname):
     try:
         file_doc = frappe.get_doc("File", {"file_url": doc.bom_excel})
         wb = openpyxl.load_workbook(file_doc.get_full_path(), data_only=True)
+        sheet = wb.active
+        col_map = get_col_map(sheet)
         
         boms = {}
         dependencies = {} # parent -> set of child items
+        current_parent = ""
         
-        # Parse Materials
-        if "BOM Materials" in wb.sheetnames:
-            ws1 = wb["BOM Materials"]
-            col_map1 = get_col_map(ws1)
-            for row in ws1.iter_rows(min_row=2, values_only=True):
-                if not any(row): continue
-                parent = clean_val(row[col_map1.get("parent", -1)]) if "parent" in col_map1 else ""
-                if not parent: continue
-                
-                if parent not in boms:
-                    boms[parent] = {"qty": 1.0, "items": [], "operations": []}
-                    dependencies[parent] = set()
-                
-                qty = flt(row[col_map1.get("qty", -1)]) if "qty" in col_map1 else 0
-                if qty > 0: boms[parent]["qty"] = qty
-                
-                child = clean_val(row[col_map1.get("child", -1)]) if "child" in col_map1 else ""
-                if child:
-                    dependencies[parent].add(child)
-                    boms[parent]["items"].append({
-                        "item_code": child,
-                        "qty": flt(row[col_map1.get("child_qty", -1)]) or 1.0
-                    })
-
-        # Parse Operations
-        if "BOM Operations" in wb.sheetnames:
-            ws2 = wb["BOM Operations"]
-            col_map2 = get_col_map(ws2)
-            for row in ws2.iter_rows(min_row=2, values_only=True):
-                if not any(row): continue
-                parent = clean_val(row[col_map2.get("parent", -1)]) if "parent" in col_map2 else ""
-                if not parent: continue
-                
-                if parent not in boms:
-                    # If an operation exists for a parent that wasn't in Materials, initialize it
-                    boms[parent] = {"qty": 1.0, "items": [], "operations": []}
-                    dependencies[parent] = set()
-                
-                op_name = clean_val(row[col_map2.get("operation", -1)]) if "operation" in col_map2 else ""
-                if op_name:
-                    sub = clean_val(row[col_map2.get("is_subcontracted", -1)]) if "is_subcontracted" in col_map2 else ""
-                    boms[parent]["operations"].append({
-                        "operation": op_name,
-                        "workstation": clean_val(row[col_map2.get("workstation", -1)]),
-                        "time_in_mins": flt(row[col_map2.get("op_time", -1)]),
-                        "hour_rate": flt(row[col_map2.get("hour_rate", -1)]),
-                        "is_subcontracted": 1 if sub.lower() in ["yes", "y", "1", "true"] else 0
-                    })
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            if not any(row): continue
+            
+            parent_raw = clean_val(row[col_map.get("parent", 0)])
+            if parent_raw:
+                current_parent = parent_raw
+            
+            parent = current_parent
+            if not parent: continue
+            
+            bom_qty = flt(row[col_map.get("bom_qty", -1)]) if "bom_qty" in col_map else 0
+            
+            if parent not in boms:
+                boms[parent] = {"qty": bom_qty or 1.0, "items": [], "operations": [], "scrap": []}
+                dependencies[parent] = set()
+            elif bom_qty > 0:
+                boms[parent]["qty"] = bom_qty # Update if redefined
+            
+            row_type = clean_val(row[col_map.get("row_type", -1)]).lower()
+            code_name = clean_val(row[col_map.get("code_name", -1)])
+            qty_time = flt(row[col_map.get("qty_time", -1)])
+            workstation = clean_val(row[col_map.get("workstation", -1)])
+            
+            if not code_name: continue
+            
+            if "material" in row_type:
+                dependencies[parent].add(code_name)
+                boms[parent]["items"].append({
+                    "item_code": code_name,
+                    "qty": qty_time or 1.0
+                })
+            elif "scrap" in row_type:
+                boms[parent]["scrap"].append({
+                    "item_code": code_name,
+                    "qty": qty_time or 1.0
+                })
+            elif "operation" in row_type:
+                boms[parent]["operations"].append({
+                    "operation": code_name,
+                    "workstation": workstation,
+                    "time_in_mins": qty_time
+                })
 
         # Topological sort for bottom-up creation
         def topological_sort(dep_graph):
@@ -220,9 +206,17 @@ def run_processing(docname):
                 bom.with_operations = 1 if data["operations"] else 0
                 
                 for item_data in data["items"]:
+                    uom = frappe.db.get_value("Item", item_data["item_code"], "stock_uom") or "Nos"
                     bom.append("items", {
                         "item_code": item_data["item_code"],
-                        "qty": item_data["qty"]
+                        "qty": item_data["qty"],
+                        "uom": uom
+                    })
+                
+                for scrap_data in data["scrap"]:
+                    bom.append("scrap_items", {
+                        "item_code": scrap_data["item_code"],
+                        "stock_qty": scrap_data["qty"]
                     })
                 
                 for op_data in data["operations"]:
@@ -231,15 +225,12 @@ def run_processing(docname):
                         new_op.operation = op_data["operation"]
                         new_op.insert(ignore_permissions=True)
                     
-                    op_row = bom.append("operations", {
+                    bom.append("operations", {
                         "operation": op_data["operation"],
                         "workstation": op_data["workstation"],
                         "time_in_mins": op_data["time_in_mins"],
-                        "hour_rate": op_data["hour_rate"]
+                        "operating_cost": 0 # ERPNext will auto-calculate if workstation has an hour rate
                     })
-                    
-                    if op_data["is_subcontracted"] and hasattr(op_row, "is_subcontracted"):
-                        op_row.is_subcontracted = 1
                 
                 bom.insert(ignore_permissions=True)
                 bom.submit()
