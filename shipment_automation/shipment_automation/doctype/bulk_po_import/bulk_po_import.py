@@ -15,7 +15,8 @@ def download_template():
     
     headers = [
         "PO Number", "PO Date", "Supplier Name", "Item Code", "Item Name", 
-        "Description", "Quantity", "Rate", "Required By", "Line Number"
+        "Description", "Quantity", "Price List Rate", "Discount on Price List Rate",
+        "Rate", "Required By", "Line Number", "Project", "Payment Term"
     ]
     ws.append(headers)
     
@@ -75,7 +76,8 @@ def get_column_map(sheet):
         "discount_percentage": ["Discount on Price List Rate", "Discount (%)", "Discount"],
         "req_date": ["Required By", "Required By Date", "Target Date"],
         "line_number": ["Line Number", "Line #"],
-        "project": ["Project"]
+        "project": ["Project"],
+        "payment_term": ["Payment Term", "Payment Terms Template"]
     }
     for idx, cell in enumerate(header_row):
         if not cell: continue
@@ -222,6 +224,9 @@ def run_processing(docname):
             po.transaction_date = po_date
             po.company = frappe.db.get_single_value("Global Defaults", "default_company")
             po.currency = (s_details.default_currency if s_details else None) or frappe.db.get_single_value("Global Defaults", "default_currency")
+            
+            if "payment_term" in col_map and first_row[col_map["payment_term"]]:
+                po.payment_terms_template = str(first_row[col_map["payment_term"]]).strip()
             
             for row in rows:
                 qty = flt(row[col_map["quantity"]]) if "quantity" in col_map else 0
