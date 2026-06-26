@@ -16,7 +16,7 @@ def download_template():
     headers = [
         "PO Number", "PO Date", "Supplier Name", "Item Code", "Item Name", 
         "Description", "Quantity", "Price List Rate", "Discount on Price List Rate",
-        "Rate", "Required By", "Line Number", "Project", "Payment Term"
+        "Rate", "Required By", "Line Number", "Project", "Payment Term", "Due Date"
     ]
     ws.append(headers)
     
@@ -77,7 +77,8 @@ def get_column_map(sheet):
         "req_date": ["Required By", "Required By Date", "Target Date"],
         "line_number": ["Line Number", "Line #"],
         "project": ["Project"],
-        "payment_term": ["Payment Term", "Payment Terms Template"]
+        "payment_term": ["Payment Term", "Payment Terms Template"],
+        "due_date": ["Due Date"]
     }
     for idx, cell in enumerate(header_row):
         if not cell: continue
@@ -227,6 +228,14 @@ def run_processing(docname):
             
             if "payment_term" in col_map and first_row[col_map["payment_term"]]:
                 po.payment_terms_template = str(first_row[col_map["payment_term"]]).strip()
+            
+            po_due_date = parse_excel_date(first_row[col_map["due_date"]]) if "due_date" in col_map else None
+            if po_due_date and not po.payment_terms_template:
+                po.append("payment_schedule", {
+                    "due_date": po_due_date,
+                    "invoice_portion": 100,
+                    "payment_amount": 0
+                })
             
             for row in rows:
                 qty = flt(row[col_map["quantity"]]) if "quantity" in col_map else 0
