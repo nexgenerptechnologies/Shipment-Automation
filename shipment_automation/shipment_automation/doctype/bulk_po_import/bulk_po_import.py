@@ -74,7 +74,8 @@ def get_column_map(sheet):
         "price_list_rate": ["Price List Rate"],
         "discount_percentage": ["Discount on Price List Rate", "Discount (%)", "Discount"],
         "req_date": ["Required By", "Required By Date", "Target Date"],
-        "line_number": ["Line Number", "Line #"]
+        "line_number": ["Line Number", "Line #"],
+        "project": ["Project"]
     }
     for idx, cell in enumerate(header_row):
         if not cell: continue
@@ -236,6 +237,8 @@ def run_processing(docname):
                     item_data["price_list_rate"] = flt(row[col_map["price_list_rate"]])
                 if "discount_percentage" in col_map and row[col_map["discount_percentage"]] is not None:
                     item_data["discount_percentage"] = flt(row[col_map["discount_percentage"]])
+                if "project" in col_map and row[col_map["project"]]:
+                    item_data["project"] = str(row[col_map["project"]]).strip()
                     
                 req_date = parse_excel_date(row[col_map["req_date"]]) if "req_date" in col_map else None
                 line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
