@@ -71,6 +71,8 @@ def get_column_map(sheet):
         "description": ["Description"],
         "quantity": ["Quantity", "Qty"],
         "rate": ["Rate"],
+        "price_list_rate": ["Price List Rate"],
+        "discount_percentage": ["Discount on Price List Rate", "Discount (%)", "Discount"],
         "req_date": ["Required By", "Required By Date", "Target Date"],
         "line_number": ["Line Number", "Line #"]
     }
@@ -221,16 +223,24 @@ def run_processing(docname):
             po.currency = (s_details.default_currency if s_details else None) or frappe.db.get_single_value("Global Defaults", "default_currency")
             
             for row in rows:
-                qty = flt(row[col_map["quantity"]])
-                rate = flt(row[col_map["rate"]])
-                req_date = parse_excel_date(row[col_map["req_date"]])
-                line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
+                qty = flt(row[col_map["quantity"]]) if "quantity" in col_map else 0
                 
-                item = po.append("items", {
+                item_data = {
                     "item_code": str(row[col_map["item_code"]]).strip(),
                     "qty": qty,
-                    "rate": rate
-                })
+                }
+                
+                if "rate" in col_map and row[col_map["rate"]] is not None:
+                    item_data["rate"] = flt(row[col_map["rate"]])
+                if "price_list_rate" in col_map and row[col_map["price_list_rate"]] is not None:
+                    item_data["price_list_rate"] = flt(row[col_map["price_list_rate"]])
+                if "discount_percentage" in col_map and row[col_map["discount_percentage"]] is not None:
+                    item_data["discount_percentage"] = flt(row[col_map["discount_percentage"]])
+                    
+                req_date = parse_excel_date(row[col_map["req_date"]]) if "req_date" in col_map else None
+                line_val = str(row[col_map["line_number"]]).strip() if col_map.get("line_number") is not None and row[col_map["line_number"]] else ""
+                
+                item = po.append("items", item_data)
                 # Set missing values first to get defaults
                 item.run_method("set_missing_values")
                 
