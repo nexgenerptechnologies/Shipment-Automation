@@ -226,17 +226,7 @@ def run_processing(docname):
             po.company = frappe.db.get_single_value("Global Defaults", "default_company")
             po.currency = (s_details.default_currency if s_details else None) or frappe.db.get_single_value("Global Defaults", "default_currency")
             
-            if "payment_term" in col_map and first_row[col_map["payment_term"]]:
-                po.payment_terms_template = str(first_row[col_map["payment_term"]]).strip()
-            
             po_due_date = parse_excel_date(first_row[col_map["due_date"]]) if "due_date" in col_map else None
-            if po_due_date and not po.payment_terms_template:
-                po.append("payment_schedule", {
-                    "due_date": po_due_date,
-                    "invoice_portion": 100,
-                    "payment_amount": 0
-                })
-            
             for row in rows:
                 qty = flt(row[col_map["quantity"]]) if "quantity" in col_map else 0
                 
@@ -272,6 +262,23 @@ def run_processing(docname):
 
             try:
                 po.run_method("set_missing_values")
+                
+                # ENFORCE Excel Overrides for Payment Terms / Due Date
+                # If they provided a payment term, use it
+                if "payment_term" in col_map and first_row[col_map["payment_term"]]:
+                    po.payment_terms_template = str(first_row[col_map["payment_term"]]).strip()
+                    if hasattr(po, "set_payment_schedule"):
+                        po.set_payment_schedule()
+                # If they didn't provide a payment term, but provided a due date, enforce it
+                elif po_due_date:
+                    po.payment_terms_template = None
+                    po.set("payment_schedule", [])
+                    po.append("payment_schedule", {
+                        "due_date": po_due_date,
+                        "invoice_portion": 100,
+                        "payment_amount": 0
+                    })
+                    
                 po.run_method("calculate_taxes_and_totals")
                 
                 po.flags.ignore_permissions = True
