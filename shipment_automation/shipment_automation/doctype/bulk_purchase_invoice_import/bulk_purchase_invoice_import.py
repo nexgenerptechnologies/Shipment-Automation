@@ -360,6 +360,7 @@ def run_processing(docname):
                                     freight_tax_row.charge_type = "Actual"
                                     freight_tax_row.tax_amount = total_freight
                                     freight_tax_row.rate = 0
+                                    freight_idx = freight_tax_row.idx
                                 else:
                                     freight_account = frappe.db.get_value("Account", {"company": pi.company, "account_name": ("like", "%Freight%")}, "name")
                                     if not freight_account:
@@ -385,6 +386,14 @@ def run_processing(docname):
                                                     t.row_id = str(int(t.row_id) + 1)
                                                 except ValueError:
                                                     pass
+                                        freight_idx = 1
+                                
+                                # Fix subsequent taxes that are "On Net Total" to calculate on Freight
+                                if 'freight_idx' in locals() and freight_idx is not None:
+                                    for t in pi.get("taxes", []):
+                                        if t.idx > freight_idx and t.charge_type == "On Net Total":
+                                            t.charge_type = "On Previous Row Total"
+                                            t.row_id = str(freight_idx)
 
                     pi.insert(ignore_permissions=True)
                     # pi.submit()  # User requested invoice to remain in Draft status
