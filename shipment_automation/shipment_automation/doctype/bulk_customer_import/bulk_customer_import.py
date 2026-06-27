@@ -20,7 +20,8 @@ def download_template():
     ws.title = "Bulk Customer Import"
     
     headers = [
-        "Customer ID (Leave blank for Auto)", "Naming Series", "Customer Name",         "Customer Type", "Territory", "GST Category", "GSTIN",
+        "Customer ID (Leave blank for Auto)", "Naming Series", "Customer Name", 
+        "Customer Type", "Customer Group", "Territory", "GST Category", "GSTIN",
         "Address Line 1", "City", "State", "Pincode", "Country",
         "Contact Person Name", "Email Address", "Mobile Number"
     ]
@@ -73,7 +74,8 @@ def get_column_map(sheet):
         "id": ["Customer ID (Leave blank for Auto)", "Customer ID"],
         "series": ["Naming Series"],
         "name": ["Customer Name"],
-        "group": ["Customer Type", "Customer Group"],
+        "type": ["Customer Type"],
+        "group": ["Customer Group"],
         "territory": ["Territory"],
         "gst_cat": ["GST Category"],
         "gstin": ["GSTIN"],
@@ -112,6 +114,7 @@ def run_validation(docname):
             row_errors = []
             manual_id = str(row[col_map["id"]]).strip() if col_map.get("id") is not None and row[col_map["id"]] else ""
             customer_name = str(row[col_map["name"]]).strip() if col_map.get("name") is not None else ""
+            cust_type = str(row[col_map["type"]]).strip() if col_map.get("type") is not None and row[col_map["type"]] else ""
             group = str(row[col_map["group"]]).strip() if col_map.get("group") is not None and row[col_map["group"]] else ""
             territory = str(row[col_map["territory"]]).strip() if col_map.get("territory") is not None and row[col_map["territory"]] else ""
             gstin = str(row[col_map["gstin"]]).strip() if col_map.get("gstin") is not None and row[col_map["gstin"]] else ""
@@ -168,8 +171,9 @@ def run_processing(docname):
             if not any(row): continue
             manual_id = clean_val(row[col_map["id"]])
             series = clean_val(row[col_map["series"]])
-            customer_name = clean_val(row[col_map["name"]])
-            group = clean_val(row[col_map["group"]])
+            customer_name = clean_val(row[col_map["name"]]) if "name" in col_map else ""
+            cust_type = clean_val(row[col_map["type"]]) if "type" in col_map else ""
+            group = clean_val(row[col_map["group"]]) if "group" in col_map else ""
             
             # Check if group is a 'Group' type
             if group and frappe.db.get_value("Customer Group", group, "is_group"):
@@ -199,8 +203,12 @@ def run_processing(docname):
                     c_doc.naming_series = series
                 
                 c_doc.customer_name = customer_name
-                c_doc.customer_group = group
-                c_doc.territory = territory
+                if cust_type:
+                    c_doc.customer_type = cust_type
+                if group:
+                    c_doc.customer_group = group
+                if territory:
+                    c_doc.territory = territory
                 
                 # Auto-set GST Category if GSTIN is present
                 if gstin and (not gst_cat or gst_cat.lower() == "none"):
