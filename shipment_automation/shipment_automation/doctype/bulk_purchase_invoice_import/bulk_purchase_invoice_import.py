@@ -16,7 +16,7 @@ def download_template():
     headers = [
         "Purchase Invoice Posting Date", "Purchase Invoice Number", "Purchase Invoice Date",
         "Supplier Name", "Purchase Order Number", "Item Code", "Item Name", 
-        "Description", "Quantity", "Price List Rate", "Discount on Price List Rate", "Rate"
+        "Description", "Quantity", "Price List Rate", "Discount on Price List Rate", "Rate", "Freight"
     ]
     ws.append(headers)
     
@@ -77,7 +77,8 @@ def get_column_map(sheet):
         "pi_num": ["Purchase Invoice Number", "PI Number", "Invoice No"],
         "pi_date": ["Purchase Invoice Date", "PI Date", "Invoice Date"],
         "price_list_rate": ["Price List Rate"],
-        "discount_percentage": ["Discount on Price List Rate"]
+        "discount_percentage": ["Discount on Price List Rate"],
+        "freight": ["Freight"]
     }
     for idx, cell in enumerate(header_row):
         if not cell: continue
@@ -340,6 +341,34 @@ def run_processing(docname):
                 
                 try:
                     pi.set_missing_values()
+
+                    # Handle Freight
+                    if col_map.get("freight") is not None:
+                        total_freight = sum(flt(r[col_map["freight"]]) for r in rows if r[col_map["freight"]] is not None)
+                        if total_freight > 0:
+                            freight_account = frappe.db.get_value("Account", {"company": pi.company, "account_name": ("like", "%Freight%")}, "name")
+                            if freight_account:
+                                freight_tax_row = None
+                                for t in pi.get("taxes"):
+                                    if t.account_head == freight_account:
+                                        freight_tax_row = t
+                                        break
+                                
+                                if freight_tax_row:
+                                    freight_tax_row.charge_type = "Actual"
+                                    freight_tax_row.tax_amount = total_freight
+                                    freight_tax_row.rate = 0
+                                else:
+                                    pi.append("taxes", {
+                                        "charge_type": "Actual",
+                                        "account_head": freight_account,
+                                        "tax_amount": total_freight,
+                                        "description": "Freight",
+                                        "add_deduct_tax": "Add"
+                                    })
+                            else:
+                                frappe.throw(f"Freight Account not found for company {pi.company}. Please create an account with 'Freight' in its name.")
+
                     pi.insert(ignore_permissions=True)
                     # pi.submit()  # User requested invoice to remain in Draft status
                     created.append(f"✅ {pi_id}")
