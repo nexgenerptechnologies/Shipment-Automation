@@ -344,7 +344,11 @@ def run_processing(docname):
 
                     # Handle Freight
                     if col_map.get("freight") is not None:
-                        total_freight = sum(flt(r[col_map["freight"]]) for r in rows if r[col_map["freight"]] is not None)
+                        total_freight = 0
+                        for r in rows:
+                            if r[col_map["freight"]] is not None and flt(r[col_map["freight"]]) > 0:
+                                total_freight = flt(r[col_map["freight"]])
+                                break
                         if total_freight > 0:
                                 freight_tax_row = None
                                 for t in pi.get("taxes"):
@@ -361,20 +365,18 @@ def run_processing(docname):
                                     if not freight_account:
                                         frappe.throw(f"Freight Account not found for company {pi.company}. Please create an account with 'Freight' in its name.")
                                     
-                                    new_tax = frappe._dict({
-                                        "doctype": "Purchase Taxes and Charges",
-                                        "parentfield": "taxes",
+                                    new_tax_doc = pi.append("taxes", {
                                         "charge_type": "Actual",
                                         "account_head": freight_account,
                                         "tax_amount": total_freight,
                                         "description": "Freight",
                                         "add_deduct_tax": "Add"
                                     })
-                                    if not pi.get("taxes"):
-                                        pi.append("taxes", new_tax)
-                                    else:
-                                        # Insert at the beginning so subsequent taxes calculate on it
-                                        pi.taxes.insert(0, new_tax)
+                                    
+                                    if len(pi.taxes) > 1:
+                                        # Move the appended row to the beginning so subsequent taxes calculate on it
+                                        pi.taxes.pop()
+                                        pi.taxes.insert(0, new_tax_doc)
                                         # Adjust row_id for existing taxes to account for the new row
                                         for i, t in enumerate(pi.taxes):
                                             t.idx = i + 1
